@@ -35,7 +35,6 @@ def load_data():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # ปรับปรุงโครงสร้างข้อมูลเก่าให้รองรับระบบ User
             if "users" not in data: 
                 data["users"] = ["แม้ว", "วิน"]
             for s in data["shares"]:
@@ -75,9 +74,9 @@ if st.session_state.current_user is None:
                 save_data(st.session_state.db)
                 st.session_state.current_user = new_user
                 st.rerun()
-    st.stop() # หยุดการทำงานตรงนี้ถ้ายังไม่เลือก User
+    st.stop()
 
-# --- Sidebar: เมนูหลัก (หลัง Login) ---
+# --- Sidebar: เมนูหลัก ---
 st.sidebar.title("🎀 Share Menu")
 st.sidebar.write(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
 if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
@@ -87,7 +86,6 @@ if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
 st.sidebar.divider()
 menu = st.sidebar.radio("ไปที่หน้า:", ["🏠 หน้าแรก & วงแชร์ของฉัน", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
 
-# ดึงข้อมูลแชร์เฉพาะของ User คนปัจจุบัน
 user_shares = [s for s in st.session_state.db["shares"] if s.get("owner") == st.session_state.current_user]
 
 # --- หน้าหลัก & จัดการวงแชร์ ---
@@ -100,7 +98,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         share_names = [s["name"] for s in user_shares]
         selected_name = st.selectbox("เลือกวงแชร์เพื่อดูหรือแก้ไขรายละเอียด:", share_names)
         
-        # ค้นหา Object วงแชร์ที่เลือก
         s = next(s for s in user_shares if s["name"] == selected_name)
         
         # 1. Summary
@@ -125,7 +122,10 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         # 3. บันทึกงวดปัจจุบัน
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
-            due = s["base_payment"] + (s["my_bid_amount"] if s["is_me_won"] else 0)
+            
+            # คำนวณยอดที่ต้องจ่าย: ยอดฐาน + ยอดเปียสะสมทั้งหมดที่เราเคยเปียได้
+            my_total_past_bids = sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+            due = s["base_payment"] + my_total_past_bids
             
             with st.expander(f"กดเพื่อบันทึกการจ่ายงวดนี้ (ยอดเรียกเก็บ: {due:,.2f} บาท)", expanded=True):
                 c1, c2, c3 = st.columns(3)
@@ -135,13 +135,14 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 if c3.button("✅ ยืนยันการจ่ายเงิน"):
                     rec_amt = 0
                     if winner == "ฉันเปียเอง":
-                        if s["is_me_won"]:
-                            st.error("คุณเคยเปียไปแล้วในวงนี้!")
-                            st.stop()
+                        # ปลดล็อกการดักจับเปียซ้ำ เพื่อให้เปียได้หลายมือ
                         s["is_me_won"] = True
-                        s["my_bid_amount"] = bid_amt
-                        rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s["other_bids"])
+                        if "my_bid_amount" not in s: s["my_bid_amount"] = 0.0
+                        s["my_bid_amount"] += bid_amt # เก็บยอดสะสมลง DB ด้วย
+                        
+                        rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", []))
                     else:
+                        if "other_bids" not in s: s["other_bids"] = []
                         s["other_bids"].append(bid_amt)
                     
                     s["history"].append({
@@ -159,18 +160,17 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         else:
             st.success("✨ วงแชร์นี้ส่งครบทุกงวดแล้ว ✨")
 
-        # 4. ตารางประวัติ & ระบบแก้ไขข้อมูล (Data Editor)
+        # 4. ตารางประวัติ & ระบบแก้ไขข้อมูล
         st.divider()
         st.subheader("📜 ประวัติการส่งแชร์ (สามารถแก้ไข/ลบ ข้อมูลในตารางได้โดยตรง)")
-        st.caption("💡 ทริค: ดับเบิลคลิกที่ช่องตัวเลขเพื่อแก้ไขยอดเงิน หรือเลือกแถวแล้วกด Delete เพื่อลบงวดนั้นทิ้ง")
+        st.caption("💡 ทริค: ดับเบิลคลิกที่ช่องตัวเลขเพื่อแก้ไข หรือเลือกแถวแล้วกด Delete เพื่อลบงวดนั้น")
         
         if s["history"]:
             df = pd.DataFrame(s["history"])
             
-            # ใช้ st.data_editor เพื่อให้แก้ไขผ่านตารางได้
             edited_df = st.data_editor(
                 df, 
-                num_rows="dynamic", # ยอมให้ลบหรือเพิ่มแถวได้
+                num_rows="dynamic",
                 use_container_width=True,
                 column_config={
                     "p": "งวดที่",
@@ -185,22 +185,21 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             if st.button("💾 บันทึกการแก้ไขตาราง"):
                 new_history = edited_df.to_dict("records")
                 
-                # เมื่อมีการแก้ประวัติ ต้องคำนวณสถานะใหม่ทั้งหมดเพื่อไม่ให้บั๊ก
                 is_me_won = False
-                my_bid_amount = 0.0
+                my_total_bids = 0.0
                 other_bids = []
                 
                 for i, h in enumerate(new_history):
-                    h["p"] = i + 1 # จัดเรียงเลขงวดใหม่เสมอเผื่อมีการลบแถว
+                    h["p"] = i + 1 
                     if h["win"] == "ฉันเปียเอง":
                         is_me_won = True
-                        my_bid_amount = float(h["bid"])
+                        my_total_bids += float(h["bid"])
                     elif h["win"] == "คนอื่น" and float(h["bid"]) > 0:
                         other_bids.append(float(h["bid"]))
                 
                 s["history"] = new_history
                 s["is_me_won"] = is_me_won
-                s["my_bid_amount"] = my_bid_amount
+                s["my_bid_amount"] = my_total_bids
                 s["other_bids"] = other_bids
                 s["current_period"] = len(new_history) + 1
                 
@@ -222,7 +221,7 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
                 st.error("กรุณาระบุชื่อวงแชร์")
             else:
                 new_share = {
-                    "owner": st.session_state.current_user, # ผูกกับเจ้าของบัญชี
+                    "owner": st.session_state.current_user,
                     "name": name,
                     "principal": principal,
                     "total_periods": periods,
@@ -257,7 +256,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                     total_paid += float(h["paid"])
                     total_received += float(h["received"])
             except ValueError:
-                pass # ข้ามไปหากรูปแบบวันที่ผิดปกติจากการแก้ไข
+                pass 
     
     st.divider()
     c1, c2, c3 = st.columns(3)
