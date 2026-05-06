@@ -1,0 +1,44 @@
+{
+    "shares": [
+        {
+            "name": "แอปเปิ้้ล",
+            "principal": 5000.0,
+            "total_periods": 51,
+            "base_payment": 100.0,
+            "current_period": 4,
+            "is_me_won": true,
+            "my_bid_amount": 35.0,
+            "other_bids": [
+                0.0,
+                30.0
+            ],
+            "history": [
+                {
+                    "p": 1,
+                    "date": "2026-05-05",
+                    "paid": 100.0,
+                    "received": 0,
+                    "bid": 0.0,
+                    "win": "คนอื่น"
+                },
+                {
+                    "p": 2,
+                    "date": "2026-05-05",
+                    "paid": 100.0,
+                    "received": 0,
+                    "bid": 30.0,
+                    "win": "คนอื่น"
+                },
+                {
+                    "p": 3,
+                    "date": "2026-05-05",
+                    "paid": 100.0,
+                    "received": 5130.0,
+                    "bid": 35.0,
+                    "win": "ฉันเปียเอง"
+                }
+            ],
+            "created_at": "2026-05-05"
+        }
+    ]
+}
