@@ -5,15 +5,19 @@ on:
     - cron: '0 1 * * *'  # 01:00 UTC = 08:00 เวลาไทย
   workflow_dispatch:      # เพิ่มปุ่มให้กดรันเองเพื่อทดสอบได้
 
+# 👇 เพิ่ม 2 บรรทัดนี้ลงไปเพื่อบังคับใช้ Node 24 ล่วงหน้าเลย แจ้งเตือนจะได้หายไปครับ
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4  # 👈 อัปเดตจาก v3 เป็น v4
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5  # 👈 อัปเดตจาก v4 เป็น v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
