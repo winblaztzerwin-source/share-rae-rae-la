@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 # ====================================================
 # 🔴 จุดที่ 1: ตั้งค่า LINE Notify และ Google Sheets
 # ====================================================
-LINE_ACCESS_TOKEN = ""
+LINE_ACCESS_TOKEN = "xQr8uwbfyrux9WgXpyuNgtOZY+nlP3wvJUqZKwBaLnqTXZeDa1Ph4FiN2dGLuY7W9aRLn/4Yv0wtNt5mjvBLCDO6a3scT1IfwL9rRxoHumHsYD9HyYfQPZifZWNCUcY8zkO1WmX9w23stY+d7Ck1MgdB04t89/1O/w1cDnyilFU="
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1HNNJT-rFCR55FNdvMtWyKIyJrE0ZgKecYKoFAsUwdfI/edit?usp=sharing"
 
 def send_line_message(message):
@@ -113,7 +113,12 @@ st.sidebar.write(f"👤 เข้าใช้งานโดย: **{st.session_s
 if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
     st.session_state.current_user = None
     st.rerun()
+
+# สวิตช์ปิดแจ้งเตือน LINE สำหรับการกรอกข้อมูลย้อนหลัง
 st.sidebar.divider()
+mute_line = st.sidebar.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
+st.sidebar.divider()
+
 menu = st.sidebar.radio("ไปที่หน้า:", ["🏠 หน้าแรก & วงแชร์ของฉัน", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
 
 user_shares = [s for s in st.session_state.db["shares"] if s.get("owner") == st.session_state.current_user]
@@ -128,7 +133,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
     else:
         selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", [s["name"] for s in user_shares])
         s = next(s for s in user_shares if s["name"] == selected_name)
-        share_type = s.get("share_type", "แชร์เปีย") # เช็กประเภทแชร์
+        share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
         
         current_due_date = calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"]) if s["current_period"] <= s["total_periods"] else None
         
@@ -140,10 +145,10 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         col2.metric("ได้รับมาแล้ว", f"{received:,.2f} ฿")
         col3.metric("กำไร/ขาดทุน", f"{received - paid:,.2f} ฿")
         
-        if share_type == "แชร์เปีย":
+        if share_type.startswith("แชร์เปีย"):
             col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history']):,.2f} ฿")
         else:
-            col4.metric("เงินต้นรวม", f"{s['principal']:,.2f} ฿")
+            col4.metric("เป้าหมายยอดรับ", f"{s.get('my_receive_amount', 0):,.2f} ฿")
             
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
@@ -157,7 +162,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
             
-            if share_type == "แชร์เปีย":
+            if share_type.startswith("แชร์เปีย"):
                 due = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
                 with st.expander(f"บันทึกการจ่าย (ยอดเรียกเก็บ: {due:,.2f} บาท)", expanded=True):
                     c1, c2, c3 = st.columns(3)
@@ -174,23 +179,35 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             s["other_bids"].append(bid_amt)
                         s["current_period"] += 1
                         save_data(st.session_state.db)
-                        send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿")
+                        if not mute_line:
+                            send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿")
                         st.rerun()
             
             else: # ถ้าเป็นแชร์ขั้นบันได
                 with st.expander(f"บันทึกการจ่ายแชร์ขั้นบันไดงวดที่ {s['current_period']}", expanded=True):
+                    # ดึงค่าที่ตั้งไว้ตอนสร้างวงมาเป็นค่าเริ่มต้นให้เลย จะได้ไม่ต้องพิมพ์บ่อยๆ
+                    default_pay = float(s.get("my_fixed_payment", 0.0))
+                    default_rec_period = s.get("my_receive_period", 0)
+                    default_rec_amt = float(s.get("my_receive_amount", 0.0))
+                    
+                    # เช็กว่าถึงงวดที่เราระบุไว้ว่าจะรับเงินหรือยัง
+                    is_my_turn_now = (s["current_period"] == default_rec_period)
+
                     c1, c2, c3 = st.columns(3)
-                    pay_amt = c1.number_input("💸 ยอดส่งงวดนี้ (ดูจากตารางของท้าว)", min_value=0.0)
-                    is_receive = c2.checkbox("🎉 ถึงคิวรับเงินงวดนี้!")
-                    rec_amt = c2.number_input("ยอดเงินที่ได้รับสุทธิ", min_value=0.0, value=float(s["principal"])) if is_receive else 0.0
+                    pay_amt = c1.number_input("💸 ยอดส่งงวดนี้ (ดึงจากที่ตั้งไว้)", min_value=0.0, value=default_pay)
+                    is_receive = c2.checkbox("🎉 ถึงคิวรับเงินงวดนี้!", value=is_my_turn_now)
+                    rec_amt = c2.number_input("ยอดเงินที่ได้รับสุทธิ", min_value=0.0, value=default_rec_amt) if is_receive else 0.0
                     
                     if c3.button("✅ ยืนยันการจ่ายเงิน"):
                         s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": pay_amt, "received": rec_amt, "bid": 0, "win": "ฉันเปียเอง" if is_receive else "คนอื่น"})
                         s["current_period"] += 1
                         save_data(st.session_state.db)
+                        
                         msg = f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {pay_amt:,.2f} ฿"
                         if is_receive: msg += f"\n🎉 ได้รับเงินแชร์: {rec_amt:,.2f} ฿"
-                        send_line_message(msg)
+                        
+                        if not mute_line:
+                            send_line_message(msg)
                         st.rerun()
 
         st.divider()
@@ -210,12 +227,25 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
 elif menu == "➕ สร้างวงแชร์ใหม่":
     st.title("➕ ตั้งค่างานแชร์ใหม่")
     with st.form("create_form"):
-        share_type = st.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (ส่งยอดตามตาราง)"])
+        share_type = st.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
         name = st.text_input("ชื่อวงแชร์")
-        principal = st.number_input("เงินต้นรวม / ยอดรับทั้งหมด", min_value=0.0)
         periods = st.number_input("จำนวนงวดทั้งหมด", min_value=1, step=1)
-        base = st.number_input("ยอดส่งฐาน (ถ้าเป็นแชร์ขั้นบันไดให้ใส่ 0)", min_value=0.0) if share_type == "แชร์เปีย" else 0.0
         
+        base = 0.0
+        principal = 0.0
+        my_fixed_payment = 0.0
+        my_receive_period = 0
+        my_receive_amount = 0.0
+        
+        if share_type == "แชร์เปีย (ประมูลดอกเบี้ย)":
+            principal = st.number_input("ยอดเงินต้นรวมทั้งหมด", min_value=0.0)
+            base = st.number_input("ยอดส่งฐาน (ต่องวด)", min_value=0.0)
+        else:
+            st.info("🎯 **ข้อมูลมือของเรา (ดูจากตารางท้าว)**")
+            my_fixed_payment = st.number_input("💸 ยอดที่เราต้องส่งคงที่ต่องวด (เช่น 500)", min_value=0.0)
+            my_receive_period = st.number_input("🗓️ เรารับเงินตอนงวดที่เท่าไหร่? (เช่น 17)", min_value=1, step=1)
+            my_receive_amount = st.number_input("💰 ยอดรับสุทธิที่จะได้ (เช่น 10020)", min_value=0.0)
+
         st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
         start_date = st.date_input("วันที่เริ่มต้นแชร์งวดแรก")
         col1, col2 = st.columns(2)
@@ -228,7 +258,10 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
                     "owner": st.session_state.current_user, "share_type": share_type, "name": name, 
                     "principal": principal, "total_periods": periods, "base_payment": base,
                     "start_date": start_date.strftime("%Y-%m-%d"), "freq_type": freq_type, "freq_val": freq_val,
-                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": []
+                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": [],
+                    "my_fixed_payment": my_fixed_payment,
+                    "my_receive_period": my_receive_period,
+                    "my_receive_amount": my_receive_amount
                 }
                 st.session_state.db["shares"].append(new_share)
                 save_data(st.session_state.db)
@@ -255,7 +288,9 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                     share_paid += float(h["paid"])
                     share_received += float(h["received"])
             except: pass 
-        summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": s.get("share_type", "แชร์เปีย"), "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
+        
+        t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
+        summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
         total_paid += share_paid
         total_received += share_received
     
@@ -267,22 +302,3 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     
     if summary_data:
         st.dataframe(pd.DataFrame(summary_data).style.format({"ยอดจ่ายรวม": "{:,.2f}", "ยอดรับรวม": "{:,.2f}", "กำไร/ขาดทุน": "{:,.2f}"}), use_container_width=True)
-    
-    st.divider()
-    if st.button("🔔 ทดสอบส่ง LINE ยอดที่ต้องจ่าย 'วันนี้' (ส่งหาทุกคน)"):
-        today = date.today()
-        due_msgs = []
-        for s in user_shares:
-            if s["current_period"] <= s["total_periods"]:
-                if calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"]) == today:
-                    if s.get("share_type", "แชร์เปีย") == "แชร์เปีย":
-                        amt = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
-                        due_msgs.append(f"- {s['name']}: {amt:,.2f} ฿")
-                    else:
-                        due_msgs.append(f"- {s['name']} (ขั้นบันได): ดูยอดในตาราง ฿")
-        if due_msgs:
-            msg = f"🌸 แจ้งเตือนแชร์วันนี้ ({st.session_state.current_user})\n" + "\n".join(due_msgs)
-            if send_line_message(msg): st.success("ส่งแจ้งเตือนสำเร็จ!")
-            else: st.error("ส่ง LINE ไม่สำเร็จ ตรวจสอบ Token")
-        else:
-            st.success("วันนี้คุณไม่มีแชร์ที่ต้องจ่ายครับ 🎉")
