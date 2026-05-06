@@ -3,7 +3,7 @@ name: Daily Share Notification
 on:
   schedule:
     - cron: '0 1 * * *'  # 01:00 UTC = 08:00 เวลาไทย
-  workflow_dispatch:      # เพิ่มปุ่มกดรันเองสำหรับเทสได้
+  workflow_dispatch:      # เพิ่มปุ่มให้กดรันเองเพื่อทดสอบได้
 
 jobs:
   notify:
@@ -23,7 +23,6 @@ jobs:
       - name: Run Bot Script
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           SHEET_URL: ${{ secrets.SHEET_URL }}
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: python bot.py
