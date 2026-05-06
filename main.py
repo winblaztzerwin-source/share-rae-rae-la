@@ -147,7 +147,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if share_type.startswith("แชร์เปีย"):
             col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history']):,.2f} ฿")
         else:
-            col4.metric("เป้าหมายยอดรับ", f"{s.get('my_receive_amount', 0):,.2f} ฿")
+            col4.metric("เงินต้น (ยอดรับ)", f"{s.get('my_receive_amount', 0):,.2f} ฿")
             
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
@@ -189,15 +189,15 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             # --- กรณี: แชร์ขั้นบันได ---
             else: 
                 default_pay = float(s.get("my_fixed_payment", 0.0))
-                default_rec_period = s.get("my_receive_period", 0)
+                default_rec_period = int(s.get("my_receive_period", 0))
                 default_rec_amt = float(s.get("my_receive_amount", 0.0))
                 is_my_turn_now = (s["current_period"] == default_rec_period)
 
                 with st.container():
                     if is_my_turn_now:
-                        st.success(f"🎉 **ถึงคิวรับเงินของคุณแล้ว!** ยอดรับสุทธิ: {default_rec_amt:,.2f} บาท")
-                        st.write(f"💸 ยอดที่ต้องส่งงวดนี้: {default_pay:,.2f} บาท")
-                        if st.button(f"✅ ยืนยันการจ่าย ({default_pay:,.2f} ฿) และ รับเงินแชร์ ({default_rec_amt:,.2f} ฿)"):
+                        st.success(f"🎉 **งวดนี้ถึงคิวรับเงินของคุณแล้ว!** ได้รับเงินต้น: {default_rec_amt:,.2f} บาท")
+                        st.write(f"💸 ยอดจ่ายงวดนี้: {default_pay:,.2f} บาท")
+                        if st.button("✅ ยืนยันจ่ายเงิน และ รับเงินแชร์"):
                             s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": default_rec_amt, "bid": 0, "win": "ฉันเปียเอง"})
                             s["current_period"] += 1
                             save_data(st.session_state.db)
@@ -205,8 +205,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                                 send_line_message(f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿\n🎉 ได้รับเงินแชร์: {default_rec_amt:,.2f} ฿")
                             st.rerun()
                     else:
-                        st.info(f"💸 **ยอดส่งคงที่:** {default_pay:,.2f} บาท")
-                        if st.button(f"✅ ยืนยันการจ่ายเงิน ({default_pay:,.2f} บาท)"):
+                        st.write(f"💸 **ยอดจ่ายงวดนี้:** {default_pay:,.2f} บาท")
+                        if st.button("✅ ยืนยันจ่ายเงิน"):
                             s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": 0, "bid": 0, "win": "คนอื่น"})
                             s["current_period"] += 1
                             save_data(st.session_state.db)
@@ -279,10 +279,10 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
             principal = st.number_input("ยอดเงินต้นรวมทั้งหมด", min_value=0.0)
             base = st.number_input("ยอดส่งฐาน (ต่องวด)", min_value=0.0)
         else:
-            st.info("🎯 **ข้อมูลมือของเรา (ดูจากตารางท้าว)**")
-            my_fixed_payment = st.number_input("💸 ยอดที่เราต้องส่งคงที่ต่องวด (เช่น 500)", min_value=0.0)
-            my_receive_period = st.number_input("🗓️ เรารับเงินตอนงวดที่เท่าไหร่? (เช่น 17)", min_value=1, step=1)
-            my_receive_amount = st.number_input("💰 ยอดรับสุทธิที่จะได้ (เช่น 10020)", min_value=0.0)
+            st.info("🎯 **ข้อมูลแชร์ขั้นบันได (สำหรับมือของเรา)**")
+            my_fixed_payment = st.number_input("จ่ายงวดละ (บาท)", min_value=0.0)
+            my_receive_period = st.number_input("งวดที่เราได้ตัง (งวดที่เท่าไหร่?)", min_value=1, step=1)
+            my_receive_amount = st.number_input("เงินต้น (ยอดที่จะได้รับ)", min_value=0.0)
 
         st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
         start_date = st.date_input("วันที่เริ่มต้นแชร์งวดแรก")
