@@ -7,7 +7,6 @@ from datetime import datetime
 # --- การตั้งค่าหน้าจอและ Theme ---
 st.set_page_config(page_title="Share rae rae la", layout="wide", page_icon="🌸")
 
-# Custom CSS เพื่อทำให้เป็นโทนชมพู Sanrio
 st.markdown("""
     <style>
     .main { background-color: #FFF0F5; }
@@ -29,59 +28,106 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- ส่วนจัดการข้อมูล (Database Simulation) ---
-DB_FILE = "shares_data.json"
+# --- ส่วนจัดการข้อมูล ---
+DB_FILE = "shares_db.json"
 
 def load_data():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"shares": []}
+            data = json.load(f)
+            # ปรับปรุงโครงสร้างข้อมูลเก่าให้รองรับระบบ User
+            if "users" not in data: 
+                data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
+            for s in data["shares"]:
+                if "owner" not in s: s["owner"] = "นวคุณ" 
+            return data
+    return {"users": ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"], "shares": []}
 
 def save_data(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# Initialize Session State
 if "db" not in st.session_state:
     st.session_state.db = load_data()
 
-# --- Sidebar: เมนูหลัก ---
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
+# --- หน้า 1: เลือกผู้เล่น (Profile Selection) ---
+if st.session_state.current_user is None:
+    st.title("🎀 ยินดีต้อนรับสู่ Share rae rae la")
+    st.subheader("👤 กรุณาเลือกหรือระบุเจ้าของบัญชี")
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        users = st.session_state.db["users"]
+        selected_user = st.selectbox("เลือกชื่อผู้เล่นที่มีอยู่:", users)
+        if st.button("เข้าสู่ระบบด้วยชื่อนี้"):
+            st.session_state.current_user = selected_user
+            st.rerun()
+            
+    with col2:
+        st.write("หรือ เพิ่มชื่อผู้เล่นใหม่")
+        new_user = st.text_input("พิมพ์ชื่อใหม่ที่นี่:")
+        if st.button("เพิ่มและเข้าสู่ระบบ"):
+            if new_user and new_user not in users:
+                st.session_state.db["users"].append(new_user)
+                save_data(st.session_state.db)
+                st.session_state.current_user = new_user
+                st.rerun()
+    st.stop() # หยุดการทำงานตรงนี้ถ้ายังไม่เลือก User
+
+# --- Sidebar: เมนูหลัก (หลัง Login) ---
 st.sidebar.title("🎀 Share Menu")
+st.sidebar.write(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
+if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
+    st.session_state.current_user = None
+    st.rerun()
+
+st.sidebar.divider()
 menu = st.sidebar.radio("ไปที่หน้า:", ["🏠 หน้าแรก & วงแชร์ของฉัน", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
 
-# --- หน้า 1: หน้าแรก & รายละเอียดวงแชร์ ---
+# ดึงข้อมูลแชร์เฉพาะของ User คนปัจจุบัน
+user_shares = [s for s in st.session_state.db["shares"] if s.get("owner") == st.session_state.current_user]
+
+# --- หน้าหลัก & จัดการวงแชร์ ---
 if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
     st.title("🌸 วงแชร์ของฉัน")
     
-    shares = st.session_state.db["shares"]
-    if not shares:
-        st.info("ยังไม่มีวงแชร์ในระบบ เริ่มสร้างวงแรกได้ที่เมนู 'สร้างวงแชร์ใหม่'")
+    if not user_shares:
+        st.info("คุณยังไม่มีวงแชร์ในระบบ เริ่มสร้างวงแรกได้ที่เมนู 'สร้างวงแชร์ใหม่'")
     else:
-        # เลือกวงแชร์ที่ต้องการดู
-        share_names = [s["name"] for s in shares]
-        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", share_names)
+        share_names = [s["name"] for s in user_shares]
+        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูหรือแก้ไขรายละเอียด:", share_names)
         
-        # ค้นหาข้อมูลวงที่เลือก
-        idx = next(i for i, s in enumerate(shares) if s["name"] == selected_name)
-        s = shares[idx]
+        # ค้นหา Object วงแชร์ที่เลือก
+        s = next(s for s in user_shares if s["name"] == selected_name)
         
-        # ส่วนแสดงผล Summary ของวงนั้น
+        # 1. Summary
         col1, col2, col3 = st.columns(3)
-        paid = sum(h["paid"] for h in s["history"])
-        received = sum(h["received"] for h in s["history"])
+        paid = sum(float(h["paid"]) for h in s["history"])
+        received = sum(float(h["received"]) for h in s["history"])
         profit = received - paid
         
         col1.metric("จ่ายไปแล้ว", f"{paid:,.2f} ฿")
         col2.metric("ได้รับมาแล้ว", f"{received:,.2f} ฿")
         col3.metric("กำไร/ขาดทุน", f"{profit:,.2f} ฿", delta=profit)
 
-        # ส่วนบันทึกงวดปัจจุบัน
+        # 2. ฟังก์ชันลบวงแชร์
+        with st.expander("⚙️ ตั้งค่า (ลบวงแชร์)"):
+            st.warning("หากลบวงแชร์นี้แล้ว จะไม่สามารถกู้คืนข้อมูลได้")
+            if st.button("🗑️ ยืนยันการลบวงแชร์นี้"):
+                st.session_state.db["shares"].remove(s)
+                save_data(st.session_state.db)
+                st.success("ลบวงแชร์เรียบร้อยแล้ว")
+                st.rerun()
+
+        # 3. บันทึกงวดปัจจุบัน
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
             due = s["base_payment"] + (s["my_bid_amount"] if s["is_me_won"] else 0)
             
-            with st.expander(f"กดเพื่อบันทึกการจ่ายงวดนี้ ({due:,.2f} บาท)", expanded=True):
+            with st.expander(f"กดเพื่อบันทึกการจ่ายงวดนี้ (ยอดเรียกเก็บ: {due:,.2f} บาท)", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 bid_amt = c1.number_input("ยอดเปียงวดนี้ (ถ้ามี)", min_value=0.0)
                 winner = c2.selectbox("ใครเป็นคนเปีย?", ["คนอื่น", "ฉันเปียเอง"])
@@ -91,14 +137,13 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     if winner == "ฉันเปียเอง":
                         if s["is_me_won"]:
                             st.error("คุณเคยเปียไปแล้วในวงนี้!")
-                        else:
-                            s["is_me_won"] = True
-                            s["my_bid_amount"] = bid_amt
-                            rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s["other_bids"])
+                            st.stop()
+                        s["is_me_won"] = True
+                        s["my_bid_amount"] = bid_amt
+                        rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s["other_bids"])
                     else:
                         s["other_bids"].append(bid_amt)
                     
-                    # บันทึกประวัติ
                     s["history"].append({
                         "p": s["current_period"],
                         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -112,13 +157,56 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     st.success("บันทึกข้อมูลเรียบร้อย!")
                     st.rerun()
         else:
-            st.success("✨ วงแชร์นี้สิ้นสุดแล้ว ✨")
+            st.success("✨ วงแชร์นี้ส่งครบทุกงวดแล้ว ✨")
 
-        # ตารางประวัติ
+        # 4. ตารางประวัติ & ระบบแก้ไขข้อมูล (Data Editor)
+        st.divider()
+        st.subheader("📜 ประวัติการส่งแชร์ (สามารถแก้ไข/ลบ ข้อมูลในตารางได้โดยตรง)")
+        st.caption("💡 ทริค: ดับเบิลคลิกที่ช่องตัวเลขเพื่อแก้ไขยอดเงิน หรือเลือกแถวแล้วกด Delete เพื่อลบงวดนั้นทิ้ง")
+        
         if s["history"]:
-            st.write("### 📜 ประวัติการส่งแชร์")
             df = pd.DataFrame(s["history"])
-            st.dataframe(df, use_container_width=True)
+            
+            # ใช้ st.data_editor เพื่อให้แก้ไขผ่านตารางได้
+            edited_df = st.data_editor(
+                df, 
+                num_rows="dynamic", # ยอมให้ลบหรือเพิ่มแถวได้
+                use_container_width=True,
+                column_config={
+                    "p": "งวดที่",
+                    "date": "วันที่จ่าย",
+                    "paid": st.column_config.NumberColumn("ยอดที่จ่าย", format="%.2f"),
+                    "received": st.column_config.NumberColumn("ยอดที่รับ", format="%.2f"),
+                    "bid": st.column_config.NumberColumn("ยอดเปีย", format="%.2f"),
+                    "win": st.column_config.SelectboxColumn("คนเปีย", options=["คนอื่น", "ฉันเปียเอง"])
+                }
+            )
+            
+            if st.button("💾 บันทึกการแก้ไขตาราง"):
+                new_history = edited_df.to_dict("records")
+                
+                # เมื่อมีการแก้ประวัติ ต้องคำนวณสถานะใหม่ทั้งหมดเพื่อไม่ให้บั๊ก
+                is_me_won = False
+                my_bid_amount = 0.0
+                other_bids = []
+                
+                for i, h in enumerate(new_history):
+                    h["p"] = i + 1 # จัดเรียงเลขงวดใหม่เสมอเผื่อมีการลบแถว
+                    if h["win"] == "ฉันเปียเอง":
+                        is_me_won = True
+                        my_bid_amount = float(h["bid"])
+                    elif h["win"] == "คนอื่น" and float(h["bid"]) > 0:
+                        other_bids.append(float(h["bid"]))
+                
+                s["history"] = new_history
+                s["is_me_won"] = is_me_won
+                s["my_bid_amount"] = my_bid_amount
+                s["other_bids"] = other_bids
+                s["current_period"] = len(new_history) + 1
+                
+                save_data(st.session_state.db)
+                st.success("อัปเดตประวัติการเปียและการจ่ายเรียบร้อยแล้ว!")
+                st.rerun()
 
 # --- หน้า 2: สร้างวงแชร์ใหม่ ---
 elif menu == "➕ สร้างวงแชร์ใหม่":
@@ -130,25 +218,29 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
         base = st.number_input("ยอดส่งฐานต่อคนต่องวด", min_value=0.0)
         
         if st.form_submit_button("💖 สร้างวงแชร์"):
-            new_share = {
-                "name": name,
-                "principal": principal,
-                "total_periods": periods,
-                "base_payment": base,
-                "current_period": 1,
-                "is_me_won": False,
-                "my_bid_amount": 0.0,
-                "other_bids": [],
-                "history": [],
-                "created_at": datetime.now().strftime("%Y-%m-%d")
-            }
-            st.session_state.db["shares"].append(new_share)
-            save_data(st.session_state.db)
-            st.success(f"สร้างวงแชร์ '{name}' สำเร็จ!")
+            if not name:
+                st.error("กรุณาระบุชื่อวงแชร์")
+            else:
+                new_share = {
+                    "owner": st.session_state.current_user, # ผูกกับเจ้าของบัญชี
+                    "name": name,
+                    "principal": principal,
+                    "total_periods": periods,
+                    "base_payment": base,
+                    "current_period": 1,
+                    "is_me_won": False,
+                    "my_bid_amount": 0.0,
+                    "other_bids": [],
+                    "history": [],
+                    "created_at": datetime.now().strftime("%Y-%m-%d")
+                }
+                st.session_state.db["shares"].append(new_share)
+                save_data(st.session_state.db)
+                st.success(f"สร้างวงแชร์ '{name}' สำเร็จ! ไปที่เมนู 'วงแชร์ของฉัน' เพื่อเริ่มใช้งาน")
 
-# --- หน้า 3: สรุปภาพรวม (Filter วันที่) ---
+# --- หน้า 3: สรุปภาพรวม ---
 elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
-    st.title("📊 สรุปภาพรวมทุกวงแชร์")
+    st.title("📊 สรุปภาพรวมของคุณ")
     
     col1, col2 = st.columns(2)
     start_date = col1.date_input("ตั้งแต่วันที่", value=datetime(2024, 1, 1))
@@ -157,12 +249,15 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     total_paid = 0
     total_received = 0
     
-    for s in st.session_state.db["shares"]:
+    for s in user_shares:
         for h in s["history"]:
-            h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
-            if start_date <= h_date <= end_date:
-                total_paid += h["paid"]
-                total_received += h["received"]
+            try:
+                h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
+                if start_date <= h_date <= end_date:
+                    total_paid += float(h["paid"])
+                    total_received += float(h["received"])
+            except ValueError:
+                pass # ข้ามไปหากรูปแบบวันที่ผิดปกติจากการแก้ไข
     
     st.divider()
     c1, c2, c3 = st.columns(3)
