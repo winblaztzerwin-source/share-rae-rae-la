@@ -114,7 +114,6 @@ if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
     st.session_state.current_user = None
     st.rerun()
 
-# สวิตช์ปิดแจ้งเตือน LINE สำหรับการกรอกข้อมูลย้อนหลัง
 st.sidebar.divider()
 mute_line = st.sidebar.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
 st.sidebar.divider()
@@ -158,13 +157,17 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 save_data(st.session_state.db)
                 st.rerun()
 
+        # ==========================================
         # --- ส่วนบันทึกการจ่ายเงิน (แยกตามประเภทแชร์) ---
+        # ==========================================
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
             
+            # --- กรณี: แชร์เปีย ---
             if share_type.startswith("แชร์เปีย"):
                 due = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
-                with st.expander(f"บันทึกการจ่าย (ยอดเรียกเก็บ: {due:,.2f} บาท)", expanded=True):
+                with st.container():
+                    st.write(f"💸 **ยอดเรียกเก็บงวดนี้:** {due:,.2f} บาท")
                     c1, c2, c3 = st.columns(3)
                     bid_amt = c1.number_input("ยอดเปียงวดนี้ (ถ้ามี)", min_value=0.0)
                     winner = c2.selectbox("ใครเปีย?", ["คนอื่น", "ฉันเปียเอง"])
@@ -183,43 +186,78 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿")
                         st.rerun()
             
-            else: # ถ้าเป็นแชร์ขั้นบันได
-                with st.expander(f"บันทึกการจ่ายแชร์ขั้นบันไดงวดที่ {s['current_period']}", expanded=True):
-                    # ดึงค่าที่ตั้งไว้ตอนสร้างวงมาเป็นค่าเริ่มต้นให้เลย จะได้ไม่ต้องพิมพ์บ่อยๆ
-                    default_pay = float(s.get("my_fixed_payment", 0.0))
-                    default_rec_period = s.get("my_receive_period", 0)
-                    default_rec_amt = float(s.get("my_receive_amount", 0.0))
-                    
-                    # เช็กว่าถึงงวดที่เราระบุไว้ว่าจะรับเงินหรือยัง
-                    is_my_turn_now = (s["current_period"] == default_rec_period)
+            # --- กรณี: แชร์ขั้นบันได ---
+            else: 
+                default_pay = float(s.get("my_fixed_payment", 0.0))
+                default_rec_period = s.get("my_receive_period", 0)
+                default_rec_amt = float(s.get("my_receive_amount", 0.0))
+                is_my_turn_now = (s["current_period"] == default_rec_period)
 
-                    c1, c2, c3 = st.columns(3)
-                    pay_amt = c1.number_input("💸 ยอดส่งงวดนี้ (ดึงจากที่ตั้งไว้)", min_value=0.0, value=default_pay)
-                    is_receive = c2.checkbox("🎉 ถึงคิวรับเงินงวดนี้!", value=is_my_turn_now)
-                    rec_amt = c2.number_input("ยอดเงินที่ได้รับสุทธิ", min_value=0.0, value=default_rec_amt) if is_receive else 0.0
-                    
-                    if c3.button("✅ ยืนยันการจ่ายเงิน"):
-                        s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": pay_amt, "received": rec_amt, "bid": 0, "win": "ฉันเปียเอง" if is_receive else "คนอื่น"})
-                        s["current_period"] += 1
-                        save_data(st.session_state.db)
-                        
-                        msg = f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {pay_amt:,.2f} ฿"
-                        if is_receive: msg += f"\n🎉 ได้รับเงินแชร์: {rec_amt:,.2f} ฿"
-                        
-                        if not mute_line:
-                            send_line_message(msg)
-                        st.rerun()
+                with st.container():
+                    if is_my_turn_now:
+                        st.success(f"🎉 **ถึงคิวรับเงินของคุณแล้ว!** ยอดรับสุทธิ: {default_rec_amt:,.2f} บาท")
+                        st.write(f"💸 ยอดที่ต้องส่งงวดนี้: {default_pay:,.2f} บาท")
+                        if st.button(f"✅ ยืนยันการจ่าย ({default_pay:,.2f} ฿) และ รับเงินแชร์ ({default_rec_amt:,.2f} ฿)"):
+                            s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": default_rec_amt, "bid": 0, "win": "ฉันเปียเอง"})
+                            s["current_period"] += 1
+                            save_data(st.session_state.db)
+                            if not mute_line:
+                                send_line_message(f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿\n🎉 ได้รับเงินแชร์: {default_rec_amt:,.2f} ฿")
+                            st.rerun()
+                    else:
+                        st.info(f"💸 **ยอดส่งคงที่:** {default_pay:,.2f} บาท")
+                        if st.button(f"✅ ยืนยันการจ่ายเงิน ({default_pay:,.2f} บาท)"):
+                            s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": 0, "bid": 0, "win": "คนอื่น"})
+                            s["current_period"] += 1
+                            save_data(st.session_state.db)
+                            if not mute_line:
+                                send_line_message(f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿")
+                            st.rerun()
 
         st.divider()
-        st.subheader("📜 ประวัติการส่ง (พิมพ์แก้ไขได้)")
-        if s["history"]:
-            edited_df = st.data_editor(pd.DataFrame(s["history"]), num_rows="dynamic", use_container_width=True)
-            if st.button("💾 บันทึกการแก้ไขตาราง"):
-                s["history"] = edited_df.to_dict("records")
-                s["current_period"] = len(s["history"]) + 1
-                save_data(st.session_state.db)
-                st.success("อัปเดตประวัติเรียบร้อย!")
-                st.rerun()
+        
+        # ==========================================
+        # --- ตารางล่วงหน้า และ ประวัติ (แบ่ง 2 คอลัมน์) ---
+        # ==========================================
+        colA, colB = st.columns(2)
+        
+        with colA:
+            st.subheader("🗓️ ตารางชำระเงินล่วงหน้า")
+            future_schedule = []
+            
+            # คำนวณยอดที่จะแสดงในตารางอนาคต
+            if share_type.startswith("แชร์เปีย"):
+                due_predict = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+            else:
+                due_predict = float(s.get("my_fixed_payment", 0.0))
+
+            for p in range(s["current_period"], s["total_periods"] + 1):
+                p_date = calculate_due_date(s["start_date"], p, s["freq_type"], s["freq_val"])
+                row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d"), "ยอดส่ง": due_predict}
+                
+                # เช็กว่ามีงวดไหนตรงกับวันรับเงินของขั้นบันไดไหม
+                if not share_type.startswith("แชร์เปีย") and p == s.get("my_receive_period", 0):
+                    row["หมายเหตุ"] = f"🎉 รับเงิน ({s.get('my_receive_amount', 0):,.2f})"
+                else:
+                    row["หมายเหตุ"] = "-"
+                    
+                future_schedule.append(row)
+                
+            if future_schedule:
+                st.dataframe(pd.DataFrame(future_schedule), use_container_width=True)
+            else:
+                st.info("ไม่มีตารางค้างชำระ (จบวงแล้ว)")
+
+        with colB:
+            st.subheader("📜 ประวัติการส่ง (พิมพ์แก้ไขได้)")
+            if s["history"]:
+                edited_df = st.data_editor(pd.DataFrame(s["history"]), num_rows="dynamic", use_container_width=True)
+                if st.button("💾 บันทึกการแก้ไขตาราง"):
+                    s["history"] = edited_df.to_dict("records")
+                    s["current_period"] = len(s["history"]) + 1
+                    save_data(st.session_state.db)
+                    st.success("อัปเดตประวัติเรียบร้อย!")
+                    st.rerun()
 
 # ====================================================
 # --- เมนู 2: สร้างวงแชร์ใหม่ ---
