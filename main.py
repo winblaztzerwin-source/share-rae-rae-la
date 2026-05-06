@@ -41,7 +41,7 @@ def load_data():
             for s in data["shares"]:
                 if "owner" not in s: s["owner"] = "นวคุณ" 
             return data
-    return {"users": ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"], "shares": []}
+    return {"users": ["แม้ว", "วิน"], "shares": []}
 
 def save_data(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
