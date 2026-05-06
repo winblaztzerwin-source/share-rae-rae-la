@@ -37,7 +37,7 @@ def load_data():
             data = json.load(f)
             # ปรับปรุงโครงสร้างข้อมูลเก่าให้รองรับระบบ User
             if "users" not in data: 
-                data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
+                data["users"] = ["แม้ว", "วิน"]
             for s in data["shares"]:
                 if "owner" not in s: s["owner"] = "นวคุณ" 
             return data
