@@ -264,8 +264,11 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
 # ====================================================
 elif menu == "➕ สร้างวงแชร์ใหม่":
     st.title("➕ ตั้งค่างานแชร์ใหม่")
+    
+    # 🔴 ย้ายตัวเลือกประเภทแชร์ออกมา "นอก" st.form เพื่อให้หน้าจออัปเดตทันทีที่กดเลือก!
+    share_type = st.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
+    
     with st.form("create_form"):
-        share_type = st.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
         name = st.text_input("ชื่อวงแชร์")
         periods = st.number_input("จำนวนงวดทั้งหมด", min_value=1, step=1)
         
@@ -280,8 +283,8 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
             base = st.number_input("ยอดส่งฐาน (ต่องวด)", min_value=0.0)
         else:
             st.info("🎯 **ข้อมูลแชร์ขั้นบันได (สำหรับมือของเรา)**")
-            my_fixed_payment = st.number_input("จ่ายงวดละ (บาท)", min_value=0.0)
             my_receive_period = st.number_input("งวดที่เราได้ตัง (งวดที่เท่าไหร่?)", min_value=1, step=1)
+            my_fixed_payment = st.number_input("จ่ายงวดละ (บาท)", min_value=0.0)
             my_receive_amount = st.number_input("เงินต้น (ยอดที่จะได้รับ)", min_value=0.0)
 
         st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
