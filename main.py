@@ -100,15 +100,17 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         
         s = next(s for s in user_shares if s["name"] == selected_name)
         
-        # 1. Summary
-        col1, col2, col3 = st.columns(3)
+        # 1. Summary (เพิ่มดอกเบี้ยสะสม)
+        col1, col2, col3, col4 = st.columns(4)
         paid = sum(float(h["paid"]) for h in s["history"])
         received = sum(float(h["received"]) for h in s["history"])
         profit = received - paid
+        total_interest = sum(float(h["bid"]) for h in s["history"]) # นำยอดเปียทั้งหมดมารวมกัน
         
         col1.metric("จ่ายไปแล้ว", f"{paid:,.2f} ฿")
         col2.metric("ได้รับมาแล้ว", f"{received:,.2f} ฿")
         col3.metric("กำไร/ขาดทุน", f"{profit:,.2f} ฿", delta=profit)
+        col4.metric("ดอกเบี้ยสะสม", f"{total_interest:,.2f} ฿")
 
         # 2. ฟังก์ชันลบวงแชร์
         with st.expander("⚙️ ตั้งค่า (ลบวงแชร์)"):
@@ -123,7 +125,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
             
-            # คำนวณยอดที่ต้องจ่าย: ยอดฐาน + ยอดเปียสะสมทั้งหมดที่เราเคยเปียได้
             my_total_past_bids = sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
             due = s["base_payment"] + my_total_past_bids
             
@@ -135,10 +136,9 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 if c3.button("✅ ยืนยันการจ่ายเงิน"):
                     rec_amt = 0
                     if winner == "ฉันเปียเอง":
-                        # ปลดล็อกการดักจับเปียซ้ำ เพื่อให้เปียได้หลายมือ
                         s["is_me_won"] = True
                         if "my_bid_amount" not in s: s["my_bid_amount"] = 0.0
-                        s["my_bid_amount"] += bid_amt # เก็บยอดสะสมลง DB ด้วย
+                        s["my_bid_amount"] += bid_amt 
                         
                         rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", []))
                     else:
@@ -247,20 +247,53 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     
     total_paid = 0
     total_received = 0
+    summary_data = [] # สำหรับเก็บข้อมูลแยกรายวง
     
     for s in user_shares:
+        share_paid = 0
+        share_received = 0
+        
         for h in s["history"]:
             try:
                 h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
                 if start_date <= h_date <= end_date:
-                    total_paid += float(h["paid"])
-                    total_received += float(h["received"])
+                    share_paid += float(h["paid"])
+                    share_received += float(h["received"])
             except ValueError:
                 pass 
+        
+        # เพิ่มข้อมูลของวงนี้ลงในตารางสรุป
+        share_profit = share_received - share_paid
+        summary_data.append({
+            "ชื่อวงแชร์": s["name"],
+            "ยอดจ่ายรวม": share_paid,
+            "ยอดรับรวม": share_received,
+            "กำไร/ขาดทุน": share_profit
+        })
+        
+        # สะสมยอดรวมทั้งหมด
+        total_paid += share_paid
+        total_received += share_received
     
+    # 1. แสดงยอดสรุปรวมทั้งหมด
     st.divider()
+    st.subheader("💰 สรุปยอดสุทธิทุกวงรวมกัน")
     c1, c2, c3 = st.columns(3)
     c1.metric("ยอดจ่ายรวมทั้งหมด", f"{total_paid:,.2f} ฿")
     c2.metric("ยอดรับรวมทั้งหมด", f"{total_received:,.2f} ฿")
     diff = total_received - total_paid
     c3.metric("กำไรสุทธิ", f"{diff:,.2f} ฿", delta=diff)
+    
+    # 2. แสดงตารางแยกแต่ละวงแชร์
+    st.divider()
+    st.subheader("📑 รายละเอียดแยกตามวงแชร์")
+    if summary_data:
+        df_summary = pd.DataFrame(summary_data)
+        # ตกแต่งตัวเลขในตารางให้มีลูกน้ำและทศนิยม 2 ตำแหน่ง
+        st.dataframe(df_summary.style.format({
+            "ยอดจ่ายรวม": "{:,.2f}",
+            "ยอดรับรวม": "{:,.2f}",
+            "กำไร/ขาดทุน": "{:,.2f}"
+        }), use_container_width=True)
+    else:
+        st.info("ไม่พบข้อมูลวงแชร์ในช่วงวันที่เลือก")
