@@ -6,7 +6,6 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 from google.oauth2.service_account import Credentials
 
-# รับค่าจาก GitHub Secrets (ใช้แค่ Token ตัวเดียว)
 LINE_ACCESS_TOKEN = os.environ.get("LINE_TOKEN")
 SHEET_URL = os.environ.get("SHEET_URL")
 
@@ -37,21 +36,27 @@ def main():
 
     today = date.today()
     due_today_msgs = []
-    total_due = 0
+    total_due_pea = 0
 
     for s in data.get("shares", []):
         if s["current_period"] <= s["total_periods"]:
             due_date = calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"])
             if due_date == today:
-                due_amt = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
                 owner_name = s.get("owner", "ไม่ระบุชื่อ")
-                due_today_msgs.append(f"👤 ของคุณ: {owner_name}\n- วง {s['name']} (งวด {s['current_period']}): {due_amt:,.2f} บาท\n")
-                total_due += due_amt
+                share_type = s.get("share_type", "แชร์เปีย")
+                
+                if share_type == "แชร์เปีย":
+                    due_amt = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+                    due_today_msgs.append(f"👤 {owner_name} | วง {s['name']} (งวด {s['current_period']}): {due_amt:,.2f} บาท\n")
+                    total_due_pea += due_amt
+                else:
+                    due_today_msgs.append(f"👤 {owner_name} | วง {s['name']} [ขั้นบันได]: กรุณาดูยอดในตาราง\n")
 
     if due_today_msgs:
-        msg = f"🌸 สรุปแชร์ที่ต้องชำระวันนี้ ({today.strftime('%d/%m/%Y')})\n\n" + "".join(due_today_msgs) + f"💰 เตรียมเงินรวมทั้งหมด: {total_due:,.2f} บาท"
-        
-        # ยิง Broadcast หาทุกคน
+        msg = f"🎀 สรุปแชร์ที่ต้องชำระวันนี้ ({today.strftime('%d/%m/%Y')})\n\n" + "".join(due_today_msgs) 
+        if total_due_pea > 0:
+            msg += f"\n💰 ยอดรวม(เฉพาะวงเปีย): {total_due_pea:,.2f} บาท"
+            
         headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'}
         payload = {"messages": [{"type": "text", "text": msg}]}
         
