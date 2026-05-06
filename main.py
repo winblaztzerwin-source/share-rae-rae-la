@@ -21,7 +21,7 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1HNNJT-rFCR55FNdvMtWyKIyJrE0
 
 # --- ฟังก์ชันส่งแจ้งเตือน LINE (แบบ Broadcast) ---
 def send_line_message(message):
-    if not LINE_ACCESS_TOKEN or LINE_ACCESS_TOKEN == "xQr8uwbfyrux9WgXpyuNgtOZY+nlP3wvJUqZKwBaLnqTXZeDa1Ph4FiN2dGLuY7W9aRLn/4Yv0wtNt5mjvBLCDO6a3scT1IfwL9rRxoHumHsYD9HyYfQPZifZWNCUcY8zkO1WmX9w23stY+d7Ck1MgdB04t89/1O/w1cDnyilFU=":
+    if not LINE_ACCESS_TOKEN:
         return False
     url = 'https://api.line.me/v2/bot/message/broadcast'
     headers = {
