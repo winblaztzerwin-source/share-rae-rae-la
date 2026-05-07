@@ -86,7 +86,7 @@ if "current_user" not in st.session_state: st.session_state.current_user = None
 # --- หน้า 1: เลือกผู้เล่น (Login) ---
 # ====================================================
 if st.session_state.current_user is None:
-    st.image("hello-kitty.gif", width=150)
+    st.image("https://media.tenor.com/XLwkPdamUikAAAAi/hello-kitty.gif", width=150)
     st.title("🎀 ยินดีต้อนรับสู่ Share rae rae la")
     col1, col2 = st.columns(2)
     with col1:
