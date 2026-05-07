@@ -150,7 +150,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         col3.metric("กำไร/ขาดทุน", f"{received - paid:,.2f} ฿")
         
         if share_type.startswith("แชร์เปีย"):
-            col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history'] if h.get('win') == 'ฉันเปียเอง'):,.2f} ฿")
+            # แก้ไขแล้ว: ดึงดอกเบี้ยสะสมของทุกคนมารวมกันทั้งหมด
+            col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history']):,.2f} ฿")
         else:
             total_expected_receive = sum(float(hd["amount"]) for hd in hands_data)
             col4.metric("เงินต้นรวม (เป้าหมาย)", f"{total_expected_receive:,.2f} ฿")
@@ -201,12 +202,10 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         last_record = s["history"][-1] if s["history"] else None
         is_waiting_bid = last_record and last_record.get("win") == "รอผลเปีย"
 
-        # แสดงกล่องบันทึก ถ้างวดยังไม่ครบ หรือครบแล้วแต่ยังค้างกรอกผลเปียงวดสุดท้ายอยู่
         if s["current_period"] <= s["total_periods"] or is_waiting_bid:
             display_period = last_record['p'] if is_waiting_bid else s["current_period"]
             st.subheader(f"📝 บันทึกงวดที่ {display_period}")
             
-            # --- กรณี: แชร์เปีย ---
             if share_type.startswith("แชร์เปีย"):
                 base_total = s["base_payment"] * num_hands
                 due = base_total + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
@@ -249,7 +248,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                                 send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿ (รอผลเปีย)")
                             st.rerun()
             
-            # --- กรณี: แชร์ขั้นบันได ---
             else: 
                 if s["current_period"] <= s["total_periods"]:
                     default_pay = sum(float(hd["payment"]) for hd in hands_data)
@@ -288,7 +286,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             else:
                 due_predict = sum(float(hd["payment"]) for hd in hands_data)
             
-            # ถ้าเป็นแชร์เปีย แล้วมีงวดที่ "รอผลเปีย" ค้างอยู่ จะให้เริ่มแสดงตารางล่วงหน้าตั้งแต่งวดปัจจุบัน (ข้ามงวดที่จ่ายไปแล้ว)
             start_table_period = s["current_period"]
             
             for p in range(start_table_period, s["total_periods"] + 1):
@@ -311,7 +308,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 edited_df = st.data_editor(pd.DataFrame(s["history"]), num_rows="dynamic", use_container_width=True)
                 if st.button("💾 บันทึกการแก้ไขตาราง"):
                     s["history"] = edited_df.to_dict("records")
-                    # อัปเดต current_period ใหม่ เผื่อมีการเพิ่ม/ลบ แถวในตารางประวัติ
                     s["current_period"] = len(s["history"]) + 1
                     save_data(st.session_state.db)
                     st.success("อัปเดตประวัติเรียบร้อย!")
