@@ -133,9 +133,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", [s["name"] for s in user_shares])
         s = next(s for s in user_shares if s["name"] == selected_name)
         share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
-        num_hands = int(s.get("num_hands", 1)) # ดึงจำนวนมือ
+        num_hands = int(s.get("num_hands", 1))
         
-        # ดึงข้อมูลมือขั้นบันได (รองรับข้อมูลเก่าที่ยังไม่มี hands_data)
         hands_data = s.get("hands_data", [])
         if not hands_data and not share_type.startswith("แชร์เปีย"):
             hands_data = [{"period": s.get("my_receive_period", 0), "payment": s.get("my_fixed_payment", 0.0), "amount": s.get("my_receive_amount", 0.0)}]
@@ -158,8 +157,42 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
-        with st.expander("⚙️ ลบวงแชร์นี้"):
-            if st.button("🗑️ ยืนยันการลบวงแชร์นี้"):
+        # --- ⚙️ ส่วนจัดการรายละเอียดและลบวงแชร์ ---
+        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/ลบวง)"):
+            st.subheader("🛠️ แก้ไขข้อมูลพื้นฐาน")
+            # แก้ไขจำนวนมือ
+            edit_num_hands = st.number_input("แก้ไขจำนวนมือที่เล่น:", min_value=1, value=num_hands, step=1, key="edit_num_hands")
+            
+            new_hands_data_list = []
+            if share_type.startswith("แชร์เปีย"):
+                edit_base = st.number_input("แก้ไขยอดส่งฐาน (ต่อ 1 มือ):", min_value=0.0, value=float(s.get("base_payment", 0.0)))
+            else:
+                st.write("📂 **ระบุรายละเอียดแต่ละมือใหม่ (ขั้นบันได)**")
+                # เตรียมข้อมูลเบื้องต้น
+                temp_hands = hands_data.copy()
+                while len(temp_hands) < edit_num_hands:
+                    temp_hands.append({"period": 1, "payment": 0.0, "amount": 0.0})
+                
+                for i in range(edit_num_hands):
+                    st.write(f"**มือที่ {i+1}**")
+                    ec1, ec2, ec3 = st.columns(3)
+                    ep_period = ec1.number_input(f"รับเงินงวดที่ (มือ {i+1})", min_value=1, step=1, value=int(temp_hands[i]["period"]), key=f"ep_{i}")
+                    ep_pay = ec2.number_input(f"จ่ายงวดละ (มือ {i+1})", min_value=0.0, value=float(temp_hands[i]["payment"]), key=f"epay_{i}")
+                    ep_amt = ec3.number_input(f"เงินต้นที่ได้ (มือ {i+1})", min_value=0.0, value=float(temp_hands[i]["amount"]), key=f"eamt_{i}")
+                    new_hands_data_list.append({"period": ep_period, "payment": ep_pay, "amount": ep_amt})
+
+            if st.button("💾 บันทึกการแก้ไขรายละเอียด"):
+                s["num_hands"] = edit_num_hands
+                if share_type.startswith("แชร์เปีย"):
+                    s["base_payment"] = edit_base
+                else:
+                    s["hands_data"] = new_hands_data_list
+                save_data(st.session_state.db)
+                st.success("อัปเดตรายละเอียดเรียบร้อย!")
+                st.rerun()
+
+            st.divider()
+            if st.button("🗑️ ยืนยันการลบวงแชร์นี้ (ลบแล้วกู้คืนไม่ได้)"):
                 st.session_state.db["shares"].remove(s)
                 save_data(st.session_state.db)
                 st.rerun()
@@ -170,7 +203,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if s["current_period"] <= s["total_periods"]:
             st.subheader(f"📝 บันทึกงวดที่ {s['current_period']}")
             
-            # --- กรณี: แชร์เปีย ---
             if share_type.startswith("แชร์เปีย"):
                 base_total = s["base_payment"] * num_hands
                 due = base_total + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
@@ -180,17 +212,13 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     st.write(f"💸 **ยอดเรียกเก็บงวดนี้ (รวม {num_hands} มือ):** {due:,.2f} บาท")
                     c1, c2, c3 = st.columns(3)
                     bid_amt = c1.number_input("ยอดเปียงวดนี้ (ถ้ามี)", min_value=0.0)
-                    
-                    # เช็กว่าสิทธิ์การเปียเต็มหรือยัง
                     win_options = ["คนอื่น", "ฉันเปียเอง"] if times_won < num_hands else ["คนอื่น (สิทธิ์เปียครบแล้ว)"]
                     winner = c2.selectbox("ใครเปีย?", win_options)
                     is_me_winning = (winner == "ฉันเปียเอง")
 
                     if c3.button("✅ ยืนยันการจ่ายเงิน"):
-                        # หมายเหตุ: ยอดรับสมมติแบบง่ายคือได้เงินต้นเต็มๆ เพราะเราเน้นดูฝั่งจ่ายเป็นหลัก
                         rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", [])) if is_me_winning else 0
                         s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": due, "received": rec_amt, "bid": bid_amt, "win": "ฉันเปียเอง" if is_me_winning else "คนอื่น"})
-                        
                         if is_me_winning:
                             s["is_me_won"] = True
                             s["my_bid_amount"] = s.get("my_bid_amount", 0) + bid_amt
@@ -203,11 +231,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿")
                         st.rerun()
             
-            # --- กรณี: แชร์ขั้นบันได ---
             else: 
-                # รวมยอดส่งทุกมือเข้าด้วยกัน
                 default_pay = sum(float(hd["payment"]) for hd in hands_data)
-                # หามือที่ตรงคิวรับเงินในงวดนี้
                 winning_hands = [hd for hd in hands_data if hd["period"] == s["current_period"]]
                 is_my_turn_now = len(winning_hands) > 0
                 default_rec_amt = sum(float(hd["amount"]) for hd in winning_hands)
@@ -234,36 +259,23 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             st.rerun()
 
         st.divider()
-        
-        # ==========================================
-        # --- ตารางล่วงหน้า และ ประวัติ (แบ่ง 2 คอลัมน์) ---
-        # ==========================================
         colA, colB = st.columns(2)
-        
         with colA:
             st.subheader("🗓️ ตารางชำระเงินล่วงหน้า")
             future_schedule = []
-            
             if share_type.startswith("แชร์เปีย"):
                 due_predict = (s["base_payment"] * num_hands) + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
             else:
                 due_predict = sum(float(hd["payment"]) for hd in hands_data)
-
             for p in range(s["current_period"], s["total_periods"] + 1):
                 p_date = calculate_due_date(s["start_date"], p, s["freq_type"], s["freq_val"])
                 row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d"), "ยอดส่งรวม": due_predict}
-                
                 if not share_type.startswith("แชร์เปีย"):
                     win_amts = sum(float(hd["amount"]) for hd in hands_data if hd["period"] == p)
-                    if win_amts > 0:
-                        row["หมายเหตุ"] = f"🎉 รับเงิน ({win_amts:,.2f})"
-                    else:
-                        row["หมายเหตุ"] = "-"
+                    row["หมายเหตุ"] = f"🎉 รับเงิน ({win_amts:,.2f})" if win_amts > 0 else "-"
                 else:
                     row["หมายเหตุ"] = "-"
-                    
                 future_schedule.append(row)
-                
             if future_schedule:
                 st.dataframe(pd.DataFrame(future_schedule), use_container_width=True)
             else:
@@ -285,8 +297,6 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
 # ====================================================
 elif menu == "➕ สร้างวงแชร์ใหม่":
     st.title("➕ ตั้งค่างานแชร์ใหม่")
-    
-    # 🔴 ย้ายตัวเลือกประเภทและจำนวนมือออกมา "นอก" st.form 
     col_t1, col_t2 = st.columns(2)
     share_type = col_t1.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
     num_hands = col_t2.number_input("จำนวนมือที่เล่นในวงนี้", min_value=1, step=1, value=1)
@@ -294,10 +304,9 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
     with st.form("create_form"):
         name = st.text_input("ชื่อวงแชร์")
         periods = st.number_input("จำนวนงวดทั้งหมด", min_value=1, step=1)
-        
         base = 0.0
         principal = 0.0
-        hands_data = [] # เก็บข้อมูลของแชร์ขั้นบันไดแต่ละมือ
+        hands_data = []
         
         if share_type == "แชร์เปีย (ประมูลดอกเบี้ย)":
             principal = st.number_input("ยอดเงินต้นรวมทั้งหมด", min_value=0.0)
@@ -305,65 +314,3 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
             st.info(f"💡 คุณเล่น {num_hands} มือ ยอดส่งฐานรวมจะเป็น: {base * num_hands:,.2f} บาท/งวด")
         else:
             st.info("🎯 **ข้อมูลแชร์ขั้นบันได (ระบุรายละเอียดแต่ละมือ)**")
-            for i in range(num_hands):
-                st.write(f"**รายละเอียดของมือที่ {i+1}**")
-                c1, c2, c3 = st.columns(3)
-                p_period = c1.number_input(f"รับเงินงวดที่ (มือ {i+1})", min_value=1, step=1, key=f"p_{i}")
-                p_pay = c2.number_input(f"จ่ายงวดละ (มือ {i+1})", min_value=0.0, key=f"pay_{i}")
-                p_amt = c3.number_input(f"เงินต้นที่ได้ (มือ {i+1})", min_value=0.0, key=f"amt_{i}")
-                hands_data.append({"period": p_period, "payment": p_pay, "amount": p_amt})
-
-        st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
-        start_date = st.date_input("วันที่เริ่มต้นแชร์งวดแรก")
-        col1, col2 = st.columns(2)
-        freq_type = col1.selectbox("รูปแบบความถี่", ["รายวัน", "รายสัปดาห์", "รายเดือน"])
-        freq_val = col2.number_input(f"ทุกๆ กี่{freq_type.replace('ราย','')}", min_value=1, value=1)
-        
-        if st.form_submit_button("💖 สร้างวงแชร์"):
-            if name:
-                new_share = {
-                    "owner": st.session_state.current_user, "share_type": share_type, "name": name, 
-                    "principal": principal, "total_periods": periods, "base_payment": base,
-                    "num_hands": num_hands, "hands_data": hands_data,
-                    "start_date": start_date.strftime("%Y-%m-%d"), "freq_type": freq_type, "freq_val": freq_val,
-                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": []
-                }
-                st.session_state.db["shares"].append(new_share)
-                save_data(st.session_state.db)
-                st.success(f"สร้างวงแชร์สำเร็จ! ไปที่เมนู 'วงแชร์ของฉัน' ได้เลย")
-
-# ====================================================
-# --- เมนู 3: สรุปภาพรวม ---
-# ====================================================
-elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
-    st.title("📊 สรุปภาพรวมของคุณ")
-    colA, colB = st.columns(2)
-    start_date = colA.date_input("ตั้งแต่วันที่", value=datetime(2024, 1, 1))
-    end_date = colB.date_input("ถึงวันที่", value=datetime.now())
-    
-    total_paid, total_received = 0, 0
-    summary_data = []
-    
-    for s in user_shares:
-        share_paid, share_received = 0, 0
-        for h in s["history"]:
-            try:
-                h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
-                if start_date <= h_date <= end_date:
-                    share_paid += float(h["paid"])
-                    share_received += float(h["received"])
-            except: pass 
-        
-        t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
-        summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
-        total_paid += share_paid
-        total_received += share_received
-    
-    st.divider()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("ยอดจ่ายรวมทั้งหมด", f"{total_paid:,.2f} ฿")
-    c2.metric("ยอดรับรวมทั้งหมด", f"{total_received:,.2f} ฿")
-    c3.metric("กำไรสุทธิ", f"{total_received - total_paid:,.2f} ฿", delta=total_received - total_paid)
-    
-    if summary_data:
-        st.dataframe(pd.DataFrame(summary_data).style.format({"ยอดจ่ายรวม": "{:,.2f}", "ยอดรับรวม": "{:,.2f}", "กำไร/ขาดทุน": "{:,.2f}"}), use_container_width=True)
