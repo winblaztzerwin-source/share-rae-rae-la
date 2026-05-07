@@ -86,7 +86,7 @@ if "current_user" not in st.session_state: st.session_state.current_user = None
 # --- หน้า 1: เลือกผู้เล่น (Login) ---
 # ====================================================
 if st.session_state.current_user is None:
-    st.image("https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYzRjM2UwZmFjMjUyYTNmNWU1N2U0ZTVmMWJlODQ2NGRlNmUwZjQwZCZlcD12MV9pbnRlcm5hbF9naWZzX2dpZklkJmN0PWc/10bKPDUM5H7m7u/giphy.gif", width=150)
+    st.image("hello-kitty.gif", width=150)
     st.title("🎀 ยินดีต้อนรับสู่ Share rae rae la")
     col1, col2 = st.columns(2)
     with col1:
