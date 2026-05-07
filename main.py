@@ -133,10 +133,16 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", [s["name"] for s in user_shares])
         s = next(s for s in user_shares if s["name"] == selected_name)
         share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
+        num_hands = int(s.get("num_hands", 1)) # ดึงจำนวนมือ
+        
+        # ดึงข้อมูลมือขั้นบันได (รองรับข้อมูลเก่าที่ยังไม่มี hands_data)
+        hands_data = s.get("hands_data", [])
+        if not hands_data and not share_type.startswith("แชร์เปีย"):
+            hands_data = [{"period": s.get("my_receive_period", 0), "payment": s.get("my_fixed_payment", 0.0), "amount": s.get("my_receive_amount", 0.0)}]
         
         current_due_date = calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"]) if s["current_period"] <= s["total_periods"] else None
         
-        st.markdown(f"**รูปแบบวงแชร์:** 🏷️ {share_type}")
+        st.markdown(f"**รูปแบบวงแชร์:** 🏷️ {share_type} | **จำนวนมือที่เล่น:** {num_hands} มือ")
         col1, col2, col3, col4 = st.columns(4)
         paid = sum(float(h["paid"]) for h in s["history"])
         received = sum(float(h["received"]) for h in s["history"])
@@ -147,7 +153,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if share_type.startswith("แชร์เปีย"):
             col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history']):,.2f} ฿")
         else:
-            col4.metric("เงินต้น (ยอดรับ)", f"{s.get('my_receive_amount', 0):,.2f} ฿")
+            total_expected_receive = sum(float(hd["amount"]) for hd in hands_data)
+            col4.metric("เงินต้นรวม (เป้าหมาย)", f"{total_expected_receive:,.2f} ฿")
             
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
@@ -165,16 +172,26 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             
             # --- กรณี: แชร์เปีย ---
             if share_type.startswith("แชร์เปีย"):
-                due = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+                base_total = s["base_payment"] * num_hands
+                due = base_total + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+                times_won = sum(1 for h in s["history"] if h["win"] == "ฉันเปียเอง")
+                
                 with st.container():
-                    st.write(f"💸 **ยอดเรียกเก็บงวดนี้:** {due:,.2f} บาท")
+                    st.write(f"💸 **ยอดเรียกเก็บงวดนี้ (รวม {num_hands} มือ):** {due:,.2f} บาท")
                     c1, c2, c3 = st.columns(3)
                     bid_amt = c1.number_input("ยอดเปียงวดนี้ (ถ้ามี)", min_value=0.0)
-                    winner = c2.selectbox("ใครเปีย?", ["คนอื่น", "ฉันเปียเอง"])
+                    
+                    # เช็กว่าสิทธิ์การเปียเต็มหรือยัง
+                    win_options = ["คนอื่น", "ฉันเปียเอง"] if times_won < num_hands else ["คนอื่น (สิทธิ์เปียครบแล้ว)"]
+                    winner = c2.selectbox("ใครเปีย?", win_options)
+                    is_me_winning = (winner == "ฉันเปียเอง")
+
                     if c3.button("✅ ยืนยันการจ่ายเงิน"):
-                        rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", [])) if winner == "ฉันเปียเอง" else 0
-                        s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": due, "received": rec_amt, "bid": bid_amt, "win": winner})
-                        if winner == "ฉันเปียเอง":
+                        # หมายเหตุ: ยอดรับสมมติแบบง่ายคือได้เงินต้นเต็มๆ เพราะเราเน้นดูฝั่งจ่ายเป็นหลัก
+                        rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", [])) if is_me_winning else 0
+                        s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": due, "received": rec_amt, "bid": bid_amt, "win": "ฉันเปียเอง" if is_me_winning else "คนอื่น"})
+                        
+                        if is_me_winning:
                             s["is_me_won"] = True
                             s["my_bid_amount"] = s.get("my_bid_amount", 0) + bid_amt
                         else:
@@ -188,15 +205,17 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             
             # --- กรณี: แชร์ขั้นบันได ---
             else: 
-                default_pay = float(s.get("my_fixed_payment", 0.0))
-                default_rec_period = int(s.get("my_receive_period", 0))
-                default_rec_amt = float(s.get("my_receive_amount", 0.0))
-                is_my_turn_now = (s["current_period"] == default_rec_period)
+                # รวมยอดส่งทุกมือเข้าด้วยกัน
+                default_pay = sum(float(hd["payment"]) for hd in hands_data)
+                # หามือที่ตรงคิวรับเงินในงวดนี้
+                winning_hands = [hd for hd in hands_data if hd["period"] == s["current_period"]]
+                is_my_turn_now = len(winning_hands) > 0
+                default_rec_amt = sum(float(hd["amount"]) for hd in winning_hands)
 
                 with st.container():
                     if is_my_turn_now:
-                        st.success(f"🎉 **งวดนี้ถึงคิวรับเงินของคุณแล้ว!** ได้รับเงินต้น: {default_rec_amt:,.2f} บาท")
-                        st.write(f"💸 ยอดจ่ายงวดนี้: {default_pay:,.2f} บาท")
+                        st.success(f"🎉 **งวดนี้ถึงคิวรับเงินของคุณแล้ว!** ได้รับเงินต้นรวม: {default_rec_amt:,.2f} บาท")
+                        st.write(f"💸 ยอดจ่ายรวมงวดนี้ ({num_hands} มือ): {default_pay:,.2f} บาท")
                         if st.button("✅ ยืนยันจ่ายเงิน และ รับเงินแชร์"):
                             s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": default_rec_amt, "bid": 0, "win": "ฉันเปียเอง"})
                             s["current_period"] += 1
@@ -205,7 +224,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                                 send_line_message(f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿\n🎉 ได้รับเงินแชร์: {default_rec_amt:,.2f} ฿")
                             st.rerun()
                     else:
-                        st.write(f"💸 **ยอดจ่ายงวดนี้:** {default_pay:,.2f} บาท")
+                        st.write(f"💸 **ยอดจ่ายรวมงวดนี้ ({num_hands} มือ):** {default_pay:,.2f} บาท")
                         if st.button("✅ ยืนยันจ่ายเงิน"):
                             s["history"].append({"p": s["current_period"], "date": datetime.now().strftime("%Y-%m-%d"), "paid": default_pay, "received": 0, "bid": 0, "win": "คนอื่น"})
                             s["current_period"] += 1
@@ -225,19 +244,21 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             st.subheader("🗓️ ตารางชำระเงินล่วงหน้า")
             future_schedule = []
             
-            # คำนวณยอดที่จะแสดงในตารางอนาคต
             if share_type.startswith("แชร์เปีย"):
-                due_predict = s["base_payment"] + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
+                due_predict = (s["base_payment"] * num_hands) + sum(float(h["bid"]) for h in s["history"] if h["win"] == "ฉันเปียเอง")
             else:
-                due_predict = float(s.get("my_fixed_payment", 0.0))
+                due_predict = sum(float(hd["payment"]) for hd in hands_data)
 
             for p in range(s["current_period"], s["total_periods"] + 1):
                 p_date = calculate_due_date(s["start_date"], p, s["freq_type"], s["freq_val"])
-                row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d"), "ยอดส่ง": due_predict}
+                row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d"), "ยอดส่งรวม": due_predict}
                 
-                # เช็กว่ามีงวดไหนตรงกับวันรับเงินของขั้นบันไดไหม
-                if not share_type.startswith("แชร์เปีย") and p == s.get("my_receive_period", 0):
-                    row["หมายเหตุ"] = f"🎉 รับเงิน ({s.get('my_receive_amount', 0):,.2f})"
+                if not share_type.startswith("แชร์เปีย"):
+                    win_amts = sum(float(hd["amount"]) for hd in hands_data if hd["period"] == p)
+                    if win_amts > 0:
+                        row["หมายเหตุ"] = f"🎉 รับเงิน ({win_amts:,.2f})"
+                    else:
+                        row["หมายเหตุ"] = "-"
                 else:
                     row["หมายเหตุ"] = "-"
                     
@@ -265,8 +286,10 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
 elif menu == "➕ สร้างวงแชร์ใหม่":
     st.title("➕ ตั้งค่างานแชร์ใหม่")
     
-    # 🔴 ย้ายตัวเลือกประเภทแชร์ออกมา "นอก" st.form เพื่อให้หน้าจออัปเดตทันทีที่กดเลือก!
-    share_type = st.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
+    # 🔴 ย้ายตัวเลือกประเภทและจำนวนมือออกมา "นอก" st.form 
+    col_t1, col_t2 = st.columns(2)
+    share_type = col_t1.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
+    num_hands = col_t2.number_input("จำนวนมือที่เล่นในวงนี้", min_value=1, step=1, value=1)
     
     with st.form("create_form"):
         name = st.text_input("ชื่อวงแชร์")
@@ -274,18 +297,21 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
         
         base = 0.0
         principal = 0.0
-        my_fixed_payment = 0.0
-        my_receive_period = 0
-        my_receive_amount = 0.0
+        hands_data = [] # เก็บข้อมูลของแชร์ขั้นบันไดแต่ละมือ
         
         if share_type == "แชร์เปีย (ประมูลดอกเบี้ย)":
             principal = st.number_input("ยอดเงินต้นรวมทั้งหมด", min_value=0.0)
-            base = st.number_input("ยอดส่งฐาน (ต่องวด)", min_value=0.0)
+            base = st.number_input("ยอดส่งฐาน (ต่อ 1 มือ)", min_value=0.0)
+            st.info(f"💡 คุณเล่น {num_hands} มือ ยอดส่งฐานรวมจะเป็น: {base * num_hands:,.2f} บาท/งวด")
         else:
-            st.info("🎯 **ข้อมูลแชร์ขั้นบันได (สำหรับมือของเรา)**")
-            my_receive_period = st.number_input("งวดที่เราได้ตัง (งวดที่เท่าไหร่?)", min_value=1, step=1)
-            my_fixed_payment = st.number_input("จ่ายงวดละ (บาท)", min_value=0.0)
-            my_receive_amount = st.number_input("เงินต้น (ยอดที่จะได้รับ)", min_value=0.0)
+            st.info("🎯 **ข้อมูลแชร์ขั้นบันได (ระบุรายละเอียดแต่ละมือ)**")
+            for i in range(num_hands):
+                st.write(f"**รายละเอียดของมือที่ {i+1}**")
+                c1, c2, c3 = st.columns(3)
+                p_period = c1.number_input(f"รับเงินงวดที่ (มือ {i+1})", min_value=1, step=1, key=f"p_{i}")
+                p_pay = c2.number_input(f"จ่ายงวดละ (มือ {i+1})", min_value=0.0, key=f"pay_{i}")
+                p_amt = c3.number_input(f"เงินต้นที่ได้ (มือ {i+1})", min_value=0.0, key=f"amt_{i}")
+                hands_data.append({"period": p_period, "payment": p_pay, "amount": p_amt})
 
         st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
         start_date = st.date_input("วันที่เริ่มต้นแชร์งวดแรก")
@@ -298,11 +324,9 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
                 new_share = {
                     "owner": st.session_state.current_user, "share_type": share_type, "name": name, 
                     "principal": principal, "total_periods": periods, "base_payment": base,
+                    "num_hands": num_hands, "hands_data": hands_data,
                     "start_date": start_date.strftime("%Y-%m-%d"), "freq_type": freq_type, "freq_val": freq_val,
-                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": [],
-                    "my_fixed_payment": my_fixed_payment,
-                    "my_receive_period": my_receive_period,
-                    "my_receive_amount": my_receive_amount
+                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": []
                 }
                 st.session_state.db["shares"].append(new_share)
                 save_data(st.session_state.db)
