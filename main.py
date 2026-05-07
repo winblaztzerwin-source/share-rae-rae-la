@@ -107,7 +107,7 @@ if st.session_state.current_user is None:
 # ====================================================
 # --- Sidebar: เมนูนำทาง ---
 # ====================================================
-st.sidebar.image("https://i.pinimg.com/originals/60/0a/85/600a850123992b8d00924968846c483a.png", use_container_width=True)
+st.sidebar.image("https://media1.tenor.com/m/eob4wmK5Z0wAAAAC/huna04.gif", use_container_width=True)
 st.sidebar.title("🎀 Share Menu")
 st.sidebar.write(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
 if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
