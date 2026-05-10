@@ -44,16 +44,19 @@ def main():
             if due_date == today:
                 owner_name = s.get("owner", "ไม่ระบุชื่อ")
                 share_type = s.get("share_type", "แชร์เปีย")
-                num_hands = int(s.get("num_hands", 1)) # ดึงจำนวนมือมาใช้งาน
+                num_hands = int(s.get("num_hands", 1))
                 
                 if share_type.startswith("แชร์เปีย"):
-                    # คำนวณแบบแชร์เปีย (ยอดฐาน x จำนวนมือ + ดอกเบี้ยเปียของฉัน)
                     due_amt = (s["base_payment"] * num_hands) + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
                     due_today_msgs.append(f"👤 {owner_name} | วง {s['name']} ({num_hands} มือ) งวด {s['current_period']}: {due_amt:,.2f} บาท\n")
                     total_due_pea += due_amt
                 else:
-                    # คำนวณแบบขั้นบันได (เอายอดส่งของทุกมือมารวมกัน)
-                    due_amt = sum(float(hd["payment"]) for hd in s.get("hands_data", []))
+                    # 🔴 เพิ่มโค้ดรองรับวงขั้นบันไดที่สร้างไว้ตั้งแต่เวอร์ชันเก่า
+                    hands_data = s.get("hands_data", [])
+                    if not hands_data:
+                        hands_data = [{"payment": s.get("my_fixed_payment", 0.0)}]
+                        
+                    due_amt = sum(float(hd["payment"]) for hd in hands_data)
                     due_today_msgs.append(f"👤 {owner_name} | วง {s['name']} [ขั้นบันได {num_hands} มือ] งวด {s['current_period']}: {due_amt:,.2f} บาท\n")
 
     if due_today_msgs:
