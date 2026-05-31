@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import os
 import re
+import math
 import requests
 import gspread
 from datetime import datetime, date
@@ -38,23 +39,25 @@ def get_gsheet_client():
 
 def load_data():
     try:
-        client = get_gsheet_client()
-        sheet = client.open_by_url(SHEET_URL).sheet1
-        data_str = sheet.acell('A1').value
-        if data_str:
-            data = json.loads(data_str)
-            if "users" not in data: data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
-            return data
+        with st.spinner("🔄 กำลังโหลดข้อมูลจาก Google Sheets..."):
+            client = get_gsheet_client()
+            sheet = client.open_by_url(SHEET_URL).sheet1
+            data_str = sheet.acell('A1').value
+            if data_str:
+                data = json.loads(data_str)
+                if "users" not in data: data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
+                return data
     except Exception as e:
         st.warning("⚠️ รอการเชื่อมต่อ Google Sheets...")
     return {"users": ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"], "shares": []}
 
 def save_data(data):
     try:
-        client = get_gsheet_client()
-        sheet = client.open_by_url(SHEET_URL).sheet1
-        json_str = json.dumps(data, ensure_ascii=False)
-        sheet.update('A1', [[json_str]])
+        with st.spinner("💾 กำลังบันทึกลง Google Sheets..."):
+            client = get_gsheet_client()
+            sheet = client.open_by_url(SHEET_URL).sheet1
+            json_str = json.dumps(data, ensure_ascii=False)
+            sheet.update('A1', [[json_str]])
     except Exception as e:
         st.error(f"❌ ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้: {e}")
 
@@ -84,10 +87,12 @@ def get_period_date(s, period):
 # 🧰 ฟังก์ชันช่วย: คำนวณยอด / จ่ายเงิน / ย้อนกลับ
 # ====================================================
 def compute_due_amount(s):
-    """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ)"""
+    """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ)
+    วงเปีย: ฐาน×มือ + ดอกของงวดที่ 'เราเปียเอง' ไปแล้ว (ต้องส่งดอกนี้ทุกงวดจนจบวง)"""
     num_hands = int(s.get("num_hands", 1))
     if s.get("share_type", "").startswith("แชร์เปีย"):
-        return s.get("base_payment", 0) * num_hands
+        own_bids = sum(float(h.get("bid", 0)) for h in s.get("history", []) if h.get("win") == "ฉันเปียเอง")
+        return s.get("base_payment", 0) * num_hands + own_bids
     return sum(float(hd["payment"]) for hd in s.get("hands_data", []))
 
 def pay_one_period(s):
@@ -96,7 +101,7 @@ def pay_one_period(s):
     today_str = datetime.now().strftime("%Y-%m-%d")
     period = s["current_period"]
     if s.get("share_type", "").startswith("แชร์เปีย"):
-        due = s.get("base_payment", 0) * num_hands
+        due = compute_due_amount(s)
         s["history"].append({"p": period, "date": today_str, "paid": due, "received": 0, "bid": 0, "win": "รอผลเปีย"})
         s["current_period"] += 1
         msg = f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {period} แล้ว!\nยอด: {due:,.2f} ฿ (รอผลเปีย)"
@@ -164,6 +169,105 @@ def render_undo_section(shares, key_prefix):
             save_data(st.session_state.db)
             st.success(f"ย้อนกลับงวดล่าสุดของ '{s['name']}' เรียบร้อย! ตอนนี้กลับไปที่งวด {s['current_period']}")
             st.rerun()
+
+# ====================================================
+# 🎀 ตัวช่วย: สถานะ / ความคืบหน้า / พยากรณ์
+# ====================================================
+def compute_status(s):
+    today = date.today()
+    if s["current_period"] > s["total_periods"]:
+        return ("จบวงแล้ว 🎀", "#9E9E9E")
+    last = s["history"][-1] if s.get("history") else None
+    if last and last.get("win") == "รอผลเปีย":
+        return ("รอกรอกผลเปีย 🌙", "#FB8C00")
+    d = get_period_date(s, s["current_period"])
+    if d:
+        if d < today:
+            return ("เลยกำหนด ⏰", "#E53935")
+        if d == today:
+            return ("ครบกำหนดวันนี้ 💖", "#43A047")
+    return ("กำลังเล่นอยู่ 🌸", "#FF69B4")
+
+def status_pill_html(s):
+    label, color = compute_status(s)
+    return f"<span class='pill' style='background:{color};'>{label}</span>"
+
+# ---- สี/อิโมจิประจำวง ----
+THEME_EMOJIS = ["🎀", "🟢", "🟠", "🔴", "🟡", "🔵", "🟣", "🍋", "🥐", "🍊", "🍓", "🌸", "🌼", "🐰", "🐻", "⭐"]
+
+def guess_theme(text):
+    """เดาอิโมจิ/สีประจำวงจากชื่อหรือข้อความประกาศ"""
+    t = text or ""
+    table = [
+        (["เขียว", "มะนาว", "lime", "เลม่อน"], ("🍋", "#43A047")),
+        (["ส้ม", "orange"], ("🟠", "#FB8C00")),
+        (["แดง"], ("🔴", "#E53935")),
+        (["ชมพู", "พิงค์", "pink"], ("🌸", "#FF69B4")),
+        (["ฟ้า", "น้ำเงิน", "blue"], ("🔵", "#1E88E5")),
+        (["ม่วง", "purple"], ("🟣", "#8E24AA")),
+        (["เหลือง", "ทอง", "gold"], ("🟡", "#FBC02D")),
+        (["ครัวซอง", "ขนมปัง", "เบเกอ", "ขนม"], ("🥐", "#D7A86E")),
+        (["สตรอ", "strawberry"], ("🍓", "#E91E63")),
+    ]
+    for kws, theme in table:
+        if any(k in t for k in kws):
+            return theme
+    return ("🎀", "#FF69B4")
+
+def get_emoji(s):
+    return s.get("emoji") or guess_theme(s.get("name", ""))[0]
+
+def get_color(s):
+    return s.get("color") or guess_theme(s.get("name", ""))[1]
+
+def _text_on(hex_color):
+    """เลือกสีตัวอักษรให้ตัดกับพื้นหลัง (เข้มบนสีอ่อน / ขาวบนสีเข้ม)"""
+    try:
+        h = str(hex_color).lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return "#3a2a2a" if (0.299 * r + 0.587 * g + 0.114 * b) > 165 else "white"
+    except:
+        return "white"
+
+def circle_chip_html(s):
+    c = get_color(s)
+    return f"<span class='chip' style='background:{c};color:{_text_on(c)};'>{get_emoji(s)} {s.get('name','')}</span>"
+
+def project_circle(s):
+    """พยากรณ์ ยอดจ่าย/รับ/กำไร เมื่อเล่นจนจบวง
+    วงเปีย: หลังเปียได้ ต้องจ่าย ฐาน+ดอกที่เปีย ทุกงวดจนจบ → เปียเร็ว=จ่ายส่วนเกินหลายงวด"""
+    num_hands = int(s.get("num_hands", 1))
+    N = int(s.get("total_periods", 0))
+    cur = int(s.get("current_period", 1))
+    res = {"is_pia": False}
+    if s.get("share_type", "").startswith("แชร์เปีย"):
+        res["is_pia"] = True
+        P = float(s.get("principal", 0))
+        B = s.get("base_payment", 0) * num_hands
+        own_bid = sum(float(h.get("bid", 0)) for h in s.get("history", []) if h.get("win") == "ฉันเปียเอง")
+        accumulated = sum(s.get("other_bids", []))
+        bids = [b for b in s.get("other_bids", []) if b > 0]
+        avg_bid = (sum(bids) / len(bids)) if bids else float(s.get("start_bid", 0) or 0)
+        if s.get("is_me_won"):
+            past_paid = sum(float(h.get("paid", 0)) for h in s.get("history", []))
+            remaining = max(0, N - (cur - 1))
+            pay = past_paid + remaining * (B + own_bid)
+            receive = sum(float(h.get("received", 0)) for h in s.get("history", []))
+            note = "อิงผลเปียจริง (งวดที่เหลือจ่ายฐาน+ดอกที่เปียไป จนจบวง)"
+        else:
+            # กรณีดีสุด: เปียงวดสุดท้าย (ไม่ต้องจ่ายดอกส่วนเกินเลย)
+            receive = P + accumulated + avg_bid * max(0, N - cur)
+            pay = B * N
+            note = "กรณีดีสุด: เปียงวดท้าย (ดูจุดคุ้มทุนด้านล่างประกอบ)"
+        res.update({"P": P, "B": B, "N": N, "cur": cur, "own_bid": own_bid,
+                    "accumulated": accumulated, "avg_bid": avg_bid})
+    else:
+        pay_per = sum(float(hd.get("payment", 0)) for hd in s.get("hands_data", []))
+        pay = pay_per * N
+        receive = sum(float(hd.get("amount", 0)) for hd in s.get("hands_data", []))
+        note = "อิงตารางขั้นบันไดที่กำหนดไว้แน่นอน"
+    res.update({"pay": pay, "receive": receive, "profit": receive - pay, "note": note})
+    return res
 
 # ====================================================
 # 🧠 ตัวช่วยแกะข้อความประกาศวงแชร์ (Parser)
@@ -352,6 +456,7 @@ def parse_share_text(text):
     res["period_dates"] = _assign_years([tuple(t) for t in schedule_tuples])
     res["members"] = _parse_members(text)
     res["num_hands"] = 1
+    res["emoji"], res["color"] = guess_theme(text)
     return res
 
 # ====================================================
@@ -360,11 +465,19 @@ def parse_share_text(text):
 st.set_page_config(page_title="Share rae rae la", layout="wide", page_icon="🎀")
 st.markdown("""
     <style>
-    .main { background-color: #FFF0F5; }
-    .stButton>button { background-color: #FFB6C1; color: black; border-radius: 20px; border: 2px solid #FF69B4; font-family: 'Sukhumvit Set', sans-serif; }
-    .stButton>button:hover { background-color: #FF69B4; color: white; }
-    h1, h2, h3 { color: #FF1493; font-family: 'Sukhumvit Set', sans-serif; }
-    .stMetric { background-color: white; padding: 15px; border-radius: 15px; box-shadow: 2px 2px 10px rgba(255, 182, 193, 0.5); }
+    @import url('https://fonts.googleapis.com/css2?family=Itim&family=Mali:wght@400;600&display=swap');
+    html, body, [class*="css"], .stApp, .stMarkdown, p, div, span, label,
+    input, textarea, select, button, .stButton>button, .stMetric {
+        font-family: 'Itim', 'Mali', 'Sukhumvit Set', sans-serif !important;
+    }
+    .main, .stApp { background-color: #FFF0F5; }
+    .stButton>button { background-color: #FFB6C1; color: #5a2a3a; border-radius: 20px; border: 2px solid #FF69B4; font-weight: 600; transition: all .15s ease; }
+    .stButton>button:hover { background-color: #FF69B4; color: white; transform: translateY(-1px); }
+    h1, h2, h3 { color: #FF1493 !important; }
+    .stMetric { background-color: white; padding: 15px; border-radius: 18px; box-shadow: 2px 4px 14px rgba(255, 105, 180, 0.18); }
+    .pill { display:inline-block; padding:4px 14px; border-radius:999px; color:white; font-size:0.9rem; font-weight:600; box-shadow: 1px 2px 6px rgba(0,0,0,0.12); }
+    .chip { display:inline-block; padding:5px 16px; border-radius:999px; font-weight:600; font-size:1.05rem; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); margin: 2px 0; }
+    .stProgress > div > div > div > div { background-color: #FF69B4 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -419,10 +532,14 @@ if menu == "🏠 วงแชร์ของฉัน":
     if not user_shares:
         st.info("คุณยังไม่มีวงแชร์ในระบบ ไปสร้างวงแรกได้ที่เมนู 'สร้างวงแชร์ใหม่' ทางซ้ายมือครับ")
     else:
-        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", [s["name"] for s in user_shares])
+        name_to_share = {x["name"]: x for x in user_shares}
+        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", list(name_to_share.keys()),
+                                     format_func=lambda n: f"{get_emoji(name_to_share[n])} {n}")
         s = next(s for s in user_shares if s["name"] == selected_name)
         share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
         num_hands = int(s.get("num_hands", 1))
+
+        st.markdown(circle_chip_html(s), unsafe_allow_html=True)
 
         hands_data = s.get("hands_data", [])
         if not hands_data and not share_type.startswith("แชร์เปีย"):
@@ -431,6 +548,10 @@ if menu == "🏠 วงแชร์ของฉัน":
         current_due_date = get_period_date(s, s["current_period"]) if s["current_period"] <= s["total_periods"] else None
 
         st.markdown(f"**รูปแบบวงแชร์:** 🏷️ {share_type} | **จำนวนมือที่เล่น:** {num_hands} มือ")
+        st.markdown(status_pill_html(s), unsafe_allow_html=True)
+        _done = max(0, min(s["current_period"] - 1, s["total_periods"]))
+        st.progress(_done / s["total_periods"] if s["total_periods"] else 0.0,
+                    text=f"ความคืบหน้า {_done}/{s['total_periods']} งวด")
         col1, col2, col3, col4 = st.columns(4)
         paid = sum(float(h["paid"]) for h in s["history"])
         received = sum(float(h["received"]) for h in s["history"])
@@ -447,10 +568,56 @@ if menu == "🏠 วงแชร์ของฉัน":
 
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
+        with st.expander("🔮 พยากรณ์ & จุดคุ้มทุน"):
+            pj = project_circle(s)
+            if not pj["is_pia"]:
+                pc1, pc2, pc3 = st.columns(3)
+                pc1.metric("จ่ายทั้งหมด", f"{pj['pay']:,.0f} ฿")
+                pc2.metric("รับทั้งหมด", f"{pj['receive']:,.0f} ฿")
+                pc3.metric("กำไร/ขาดทุน", f"{pj['profit']:,.0f} ฿", delta=pj['profit'])
+                st.caption("ℹ️ " + pj["note"])
+            elif s.get("is_me_won"):
+                ongoing = pj["B"] + pj["own_bid"]
+                pc1, pc2, pc3 = st.columns(3)
+                pc1.metric("จ่ายทั้งหมด (คาด)", f"{pj['pay']:,.0f} ฿")
+                pc2.metric("รับแล้ว", f"{pj['receive']:,.0f} ฿")
+                pc3.metric("กำไร/ขาดทุน (คาด)", f"{pj['profit']:,.0f} ฿", delta=pj['profit'])
+                st.caption(f"ℹ️ คุณเปียไปแล้ว — งวดที่เหลือจ่ายงวดละ {ongoing:,.0f} ฿ (ฐาน {pj['B']:,.0f} + ดอกที่เปีย {pj['own_bid']:,.0f}) จนจบวง")
+            else:
+                B, N, cur, P, acc, avg = pj["B"], pj["N"], pj["cur"], pj["P"], pj["accumulated"], pj["avg_bid"]
+                st.write("ปรับสมมุติฐานเพื่อดูว่าควรเปียงวดไหนถึงจะเริ่มได้กำไร:")
+                a1, a2 = st.columns(2)
+                others_avg = a1.number_input("ดอกเฉลี่ยที่คนอื่นเปีย/งวด", min_value=0.0, value=float(round(avg)), step=50.0, key=f"be_oth_{s['name']}")
+                my_bid = a2.number_input("ดอกที่เราจะเปีย/งวด", min_value=0.0, value=float(round(avg)), step=50.0, key=f"be_my_{s['name']}")
+                rows, be_period = [], None
+                for k in range(cur, N + 1):
+                    receive_k = P + acc + others_avg * (k - cur)      # เงินต้น + ดอกคนก่อนหน้า
+                    pay_k = B * N + my_bid * (N - k)                  # ฐานทุกงวด + ดอกส่วนเกินหลังเปีย
+                    profit_k = receive_k - pay_k
+                    if be_period is None and profit_k >= 0:
+                        be_period = k
+                    rows.append({"เปียงวดที่": k, "รับ(คาด)": round(receive_k), "จ่ายทั้งวด(คาด)": round(pay_k), "กำไร/ขาดทุน": round(profit_k)})
+                if be_period:
+                    st.success(f"🎯 ควรเปียตั้งแต่ **งวดที่ {be_period}** เป็นต้นไปถึงจะเริ่มได้กำไร — เปียก่อนหน้านี้ขาดทุน")
+                else:
+                    st.warning("⚠️ ด้วยสมมุติฐานนี้ ไม่มีงวดไหนได้กำไรเลย ลองลด 'ดอกที่เราจะเปีย' ลง")
+                st.caption("📌 ยิ่งเปียช้า + เปียดอกต่ำ ยิ่งกำไร เพราะจ่ายดอกส่วนเกินน้อยงวดกว่า และได้ดอกของคนเปียก่อนหน้าเยอะกว่า")
+                st.dataframe(
+                    pd.DataFrame(rows).style.format({"รับ(คาด)": "{:,.0f}", "จ่ายทั้งวด(คาด)": "{:,.0f}", "กำไร/ขาดทุน": "{:,.0f}"}),
+                    use_container_width=True, hide_index=True)
+
         # --- ⚙️ ส่วนจัดการรายละเอียดและลบวงแชร์ ---
-        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/วันที่/ลบวง)"):
+        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/วันที่/สี/ลบวง)"):
             st.subheader("🛠️ แก้ไขข้อมูลพื้นฐาน")
             edit_num_hands = st.number_input("แก้ไขจำนวนมือที่เล่น:", min_value=1, value=num_hands, step=1, key="edit_num_hands")
+
+            st.write("🎨 **สี/อิโมจิประจำวง**")
+            mecol1, mecol2 = st.columns(2)
+            _cur_emoji = get_emoji(s)
+            _e_idx = THEME_EMOJIS.index(_cur_emoji) if _cur_emoji in THEME_EMOJIS else 0
+            edit_emoji = mecol1.selectbox("อิโมจิ", THEME_EMOJIS, index=_e_idx, key="edit_emoji")
+            edit_color = mecol2.color_picker("สี", value=get_color(s), key="edit_color")
+            st.markdown(f"<span class='chip' style='background:{edit_color};color:{_text_on(edit_color)};'>{edit_emoji} {s['name']}</span>", unsafe_allow_html=True)
 
             new_hands_data_list = []
             if share_type.startswith("แชร์เปีย"):
@@ -482,6 +649,8 @@ if menu == "🏠 วงแชร์ของฉัน":
 
             if st.button("💾 บันทึกการแก้ไขรายละเอียด"):
                 s["num_hands"] = edit_num_hands
+                s["emoji"] = edit_emoji
+                s["color"] = edit_color
                 if share_type.startswith("แชร์เปีย"):
                     s["base_payment"] = edit_base
                 else:
@@ -515,7 +684,7 @@ if menu == "🏠 วงแชร์ของฉัน":
             st.subheader(f"📝 บันทึกงวดที่ {display_period}")
 
             if share_type.startswith("แชร์เปีย"):
-                due = s["base_payment"] * num_hands
+                due = compute_due_amount(s)
                 times_won = sum(1 for h in s["history"] if h.get("win") == "ฉันเปียเอง")
 
                 if is_waiting_bid:
@@ -582,7 +751,7 @@ if menu == "🏠 วงแชร์ของฉัน":
             st.subheader("🗓️ ตารางชำระเงินล่วงหน้า")
             future_schedule = []
             if share_type.startswith("แชร์เปีย"):
-                due_predict = s["base_payment"] * num_hands
+                due_predict = compute_due_amount(s)
             else:
                 due_predict = sum(float(hd["payment"]) for hd in hands_data)
 
@@ -657,7 +826,7 @@ elif menu == "💰 จ่ายวันนี้":
                     win_amt = sum(float(hd["amount"]) for hd in s.get("hands_data", []) if hd["period"] == s["current_period"])
                     if win_amt > 0:
                         extra = f" — 🎉 งวดนี้รับ {win_amt:,.0f} ฿"
-                label = f"{tag}  **{s['name']}**  · งวด {s['current_period']} ({d.strftime('%d/%m')}) · {num_hands} มือ · จ่าย {amt:,.0f} ฿{extra}"
+                label = f"{tag} {get_emoji(s)} **{s['name']}**  · งวด {s['current_period']} ({d.strftime('%d/%m')}) · {num_hands} มือ · จ่าย {amt:,.0f} ฿{extra}"
                 picks[s["name"]] = st.checkbox(label, value=True, key=f"paychk_{s['name']}")
             submitted = st.form_submit_button("💾 บันทึกการจ่ายที่เลือกทั้งหมด")
 
@@ -689,7 +858,7 @@ elif menu == "💰 จ่ายวันนี้":
             num_hands = int(s.get("num_hands", 1))
             times_won = sum(1 for h in s["history"] if h.get("win") == "ฉันเปียเอง")
             period = s["history"][-1].get("p", "?")
-            st.markdown(f"**{s['name']}** · งวด {period}")
+            st.markdown(f"**{get_emoji(s)} {s['name']}** · งวด {period}")
             wc1, wc2, wc3 = st.columns([1.2, 1.2, 1])
             bid_amt = wc1.number_input("ยอดดอกที่ชนะ (บาท)", min_value=0.0, key=f"wbid_{s['name']}")
             can_win = times_won < num_hands
@@ -743,6 +912,13 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
     name = ca.text_input("ชื่อวงแชร์", value=p.get("name", ""), key=f"c_name_{pn}")
     num_hands = cb.number_input("จำนวนมือที่เราเล่นในวงนี้", min_value=1, step=1,
                                 value=int(p.get("num_hands", 1)), key=f"c_hands_{pn}")
+
+    ce, cf = st.columns(2)
+    _def_emoji = p.get("emoji", "🎀")
+    _emoji_idx = THEME_EMOJIS.index(_def_emoji) if _def_emoji in THEME_EMOJIS else 0
+    emoji = ce.selectbox("อิโมจิประจำวง", THEME_EMOJIS, index=_emoji_idx, key=f"c_emoji_{pn}")
+    color = cf.color_picker("สีประจำวง", value=p.get("color", "#FF69B4"), key=f"c_color_{pn}")
+    st.markdown(f"<span class='chip' style='background:{color};color:{_text_on(color)};'>{emoji} {name or 'ชื่อวง'}</span>", unsafe_allow_html=True)
 
     cc, cd = st.columns(2)
     principal = cc.number_input("ยอดเงินต้นรวม (ต้น)", min_value=0.0,
@@ -819,6 +995,7 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
             start_date_str = final_dates[0] if final_dates else date.today().strftime("%Y-%m-%d")
             new_share = {
                 "owner": st.session_state.current_user, "share_type": share_type, "name": name,
+                "emoji": emoji, "color": color,
                 "principal": float(principal), "total_periods": int(total_periods), "base_payment": float(base_payment),
                 "num_hands": int(num_hands), "hands_data": hands_data,
                 "start_date": start_date_str, "freq_type": freq_type, "freq_val": int(freq_val),
@@ -857,7 +1034,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                     share_received += float(h["received"])
             except: pass
         t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
-        summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
+        summary_data.append({"ชื่อวงแชร์": f"{get_emoji(s)} {s['name']}", "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
         total_paid += share_paid
         total_received += share_received
 
@@ -870,6 +1047,45 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     if summary_data:
         st.dataframe(pd.DataFrame(summary_data).style.format({"ยอดจ่ายรวม": "{:,.2f}", "ยอดรับรวม": "{:,.2f}", "กำไร/ขาดทุน": "{:,.2f}"}), use_container_width=True)
 
+        st.subheader("📈 กราฟกำไร/ขาดทุน")
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            st.caption("กำไร/ขาดทุนรายวง (ในช่วงที่เลือก)")
+            st.bar_chart(pd.DataFrame(summary_data).set_index("ชื่อวงแชร์")[["กำไร/ขาดทุน"]], color="#FF69B4")
+        with cg2:
+            st.caption("กำไรสะสมตามวันที่")
+            rows = []
+            for s in user_shares:
+                for h in s.get("history", []):
+                    try:
+                        hd = datetime.strptime(h["date"], "%Y-%m-%d").date()
+                    except:
+                        continue
+                    if start_date <= hd <= end_date:
+                        rows.append({"วันที่": hd, "net": float(h.get("received", 0)) - float(h.get("paid", 0))})
+            if rows:
+                cdf = pd.DataFrame(rows).groupby("วันที่")["net"].sum().sort_index().cumsum()
+                st.line_chart(cdf, color="#FF1493")
+            else:
+                st.info("ยังไม่มีประวัติในช่วงนี้")
+
+    st.divider()
+    st.subheader("🔮 พยากรณ์กำไรเมื่อจบทุกวง")
+    proj_rows = []
+    for s in user_shares:
+        pj = project_circle(s)
+        proj_rows.append({"ชื่อวงแชร์": f"{get_emoji(s)} {s['name']}", "จ่ายทั้งหมด(คาด)": pj["pay"],
+                          "รับทั้งหมด(คาด)": pj["receive"], "กำไรคาดการณ์": pj["profit"]})
+    if proj_rows:
+        pdf = pd.DataFrame(proj_rows)
+        total_proj = float(pdf["กำไรคาดการณ์"].sum())
+        st.metric("กำไรคาดการณ์รวมเมื่อจบทุกวง", f"{total_proj:,.2f} ฿", delta=total_proj)
+        st.bar_chart(pdf.set_index("ชื่อวงแชร์")[["กำไรคาดการณ์"]], color="#FFB6C1")
+        st.dataframe(pdf.style.format({"จ่ายทั้งหมด(คาด)": "{:,.2f}", "รับทั้งหมด(คาด)": "{:,.2f}", "กำไรคาดการณ์": "{:,.2f}"}), use_container_width=True)
+        st.caption("ℹ️ วงเปียที่ยังไม่ได้เปีย = กรณีดีสุด (เปียงวดท้าย) ตัวเลขจริงขึ้นกับว่าเปียงวดไหนและเปียดอกเท่าไหร่ ดูจุดคุ้มทุนรายวงได้ในหน้า 'วงแชร์ของฉัน'")
+    else:
+        st.info("ยังไม่มีวงให้พยากรณ์")
+
     st.divider()
     if st.button("🔔 ทดสอบส่ง LINE ยอดที่ต้องจ่าย 'วันนี้' (ส่งหาทุกคน)"):
         today = date.today()
@@ -879,7 +1095,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                 if get_period_date(s, s["current_period"]) == today:
                     num_h = int(s.get("num_hands", 1))
                     if s.get("share_type", "แชร์เปีย").startswith("แชร์เปีย"):
-                        amt = s["base_payment"] * num_h
+                        amt = compute_due_amount(s)
                         due_msgs.append(f"- {s['name']} ({num_h} มือ): {amt:,.2f} ฿")
                     else:
                         amt = sum(float(hd["payment"]) for hd in s.get("hands_data", []))
