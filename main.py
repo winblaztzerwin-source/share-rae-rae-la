@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import re
 import requests
 import gspread
 from datetime import datetime, date
@@ -64,6 +65,209 @@ def calculate_due_date(start_date_str, period, freq_type, freq_val):
     elif freq_type == "รายสัปดาห์": return base_date + relativedelta(weeks=steps)
     elif freq_type == "รายเดือน": return base_date + relativedelta(months=steps)
     return base_date
+
+def get_period_date(s, period):
+    """คืนวันที่ของงวดที่ระบุ โดยใช้ 'วันที่จริงต่องวด' (period_dates) ก่อน
+    ถ้าไม่มี (วงเก่า) ค่อยถอยไปคำนวณจากความถี่แบบเดิม"""
+    pdates = s.get("period_dates")
+    if pdates and 1 <= period <= len(pdates):
+        try:
+            return datetime.strptime(pdates[period - 1], "%Y-%m-%d").date()
+        except:
+            pass
+    try:
+        return calculate_due_date(s["start_date"], period, s["freq_type"], s["freq_val"])
+    except:
+        return None
+
+# ====================================================
+# 🧠 ตัวช่วยแกะข้อความประกาศวงแชร์ (Parser)
+# ====================================================
+DATE_TOKEN_RE = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2}|[ก-๙\.]{2,8})(?:\s*/\s*(\d{2,4}))?")
+
+def _clean_num(s):
+    s = re.sub(r"[^\d.]", "", str(s))
+    if s in ("", "."): return 0.0
+    try: return float(s)
+    except: return 0.0
+
+def _to_ce_year(y):
+    y = int(re.sub(r"\D", "", str(y)))
+    if y > 2400: return y - 543      # พ.ศ. -> ค.ศ.
+    if y < 100: return 2000 + (y % 100)
+    return y
+
+def _month_from_thai(tok):
+    key = re.sub(r"[\s\.]", "", tok)
+    table = {
+        "มค": 1, "มกรา": 1, "กพ": 2, "กุมภา": 2, "มีค": 3, "มีนา": 3,
+        "เมย": 4, "เมษา": 4, "พค": 5, "พฤษภา": 5, "มิย": 6, "มิถุนา": 6,
+        "กค": 7, "กรกฎา": 7, "สค": 8, "สิงหา": 8, "กย": 9, "กันยา": 9,
+        "ตค": 10, "ตุลา": 10, "พย": 11, "พฤศจิ": 11, "ธค": 12, "ธันวา": 12,
+    }
+    if key in table: return table[key]
+    for k, v in table.items():
+        if key.startswith(k): return v
+    return None
+
+def _parse_date_match(m):
+    try:
+        day = int(m.group(1))
+    except:
+        return None
+    mon_raw = m.group(2)
+    if re.fullmatch(r"\d{1,2}", mon_raw):
+        month = int(mon_raw)
+    else:
+        month = _month_from_thai(mon_raw)
+    year = _to_ce_year(m.group(3)) if m.group(3) else None
+    if not month or not (1 <= month <= 12) or not (1 <= day <= 31):
+        return None
+    return (day, month, year)
+
+def _assign_years(tuples):
+    """แปลง (วัน, เดือน, ปีหรือNone) -> list ของ date(สตริง) โดยเดาปีให้
+    เมื่อเดือนถัดไปน้อยลง = ขึ้นปีใหม่"""
+    n = len(tuples)
+    if n == 0: return []
+    years = [t[2] for t in tuples]
+    months = [t[1] for t in tuples]
+    anchor = next((i for i, y in enumerate(years) if y), None)
+    if anchor is None:
+        years[0] = date.today().year
+        anchor = 0
+    for i in range(anchor + 1, n):
+        if years[i] is None:
+            y = years[i - 1]
+            if months[i] < months[i - 1]: y += 1
+            years[i] = y
+    for i in range(anchor - 1, -1, -1):
+        if years[i] is None:
+            y = years[i + 1]
+            if months[i] > months[i + 1]: y -= 1
+            years[i] = y
+    out = []
+    for (d, mth, _), y in zip(tuples, years):
+        try:
+            out.append(date(y, mth, d).strftime("%Y-%m-%d"))
+        except:
+            out.append("")
+    return out
+
+def _normalize_date_str(s):
+    """รับสตริงวันที่จากตารางที่ผู้ใช้แก้ -> 'YYYY-MM-DD' (รองรับ ISO และ วัน/เดือน แบบไทย)"""
+    s = str(s).strip()
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        try: return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime("%Y-%m-%d")
+        except: return None
+    dm = DATE_TOKEN_RE.search(s)
+    if dm:
+        d = _parse_date_match(dm)
+        if d:
+            y = d[2] or date.today().year
+            try: return date(y, d[1], d[0]).strftime("%Y-%m-%d")
+            except: return None
+    return None
+
+def _parse_members(text):
+    """แกะ ลำดับ/ยอด/ชื่อ/วันที่ จากบรรทัดที่ขึ้นต้นด้วยเลขลำดับ (ใช้อ้างอิงเฉยๆ)"""
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*(\d{1,2})\s*[\.\)]\s*(.+)$", line)
+        if not m: continue
+        no = int(m.group(1))
+        rest = m.group(2)
+        dstr = ""
+        dm = DATE_TOKEN_RE.search(rest)
+        if dm:
+            d = _parse_date_match(dm)
+            if d:
+                dstr = f"{d[0]}/{d[1]}" + (f"/{d[2]}" if d[2] else "")
+                rest = (rest[:dm.start()] + " " + rest[dm.end():]).strip()
+        amount = ""
+        am = re.match(r"\s*([\d,]+)\s*(.*)$", rest)
+        name = rest
+        if am and am.group(1):
+            amount = am.group(1).replace(",", "")
+            name = am.group(2)
+        name = re.sub(r"[^\wก-๙\s]", "", name).strip()
+        out.append({"ลำดับ": no, "ยอด/ดอก": amount, "ชื่อ": name, "วันที่": dstr})
+    return out
+
+def parse_share_text(text):
+    text = text or ""
+    res = {"raw": text}
+
+    # ---- ประเภทวง ----
+    if "ขั้นบันได" in text:
+        res["share_type"] = "แชร์ขั้นบันได (เฉพาะมือของเรา)"
+    elif re.search(r"(เปีย|บิท|บิด|ตารางรับยอด|อั้นดอก|หมุนเสีย|ดอกเริ่ม|เปียขั้นต่ำ)", text):
+        res["share_type"] = "แชร์เปีย (ประมูลดอกเบี้ย)"
+    else:
+        res["share_type"] = "แชร์ขั้นบันได (เฉพาะมือของเรา)"
+
+    # ---- ชื่อวง ----
+    name = ""
+    for line in text.splitlines():
+        if "วง" in line and "บัญชี" not in line and "วันที่" not in line:
+            cand = re.sub(r"[^\wก-๙\s]", "", line).strip()
+            cand = re.sub(r"\s+", " ", cand)
+            if cand:
+                name = cand
+                break
+    res["name"] = name
+
+    # ---- ตัวเลขหลัก (ทนอิโมจิ/สัญลักษณ์คั่นระหว่างคำกับเลข) ----
+    m = re.search(r"ต้น[^\d\n]*([\d,]+)", text)
+    res["principal"] = _clean_num(m.group(1)) if m else 0.0
+    m = re.search(r"ส่งมือละ[^\d\n]*([\d,]+)", text)
+    res["base_payment"] = _clean_num(m.group(1)) if m else 0.0
+    m = re.search(r"(?:ดอกเริ่มต้นที่|เปียขั้นต่ำ|ดอกเริ่ม)[^\d\n]*([\d,]+)", text)
+    res["start_bid"] = _clean_num(m.group(1)) if m else 0.0
+    m = re.search(r"ค่าดูแล[^\d\n]*([\d,]+)", text)
+    res["admin_fee"] = _clean_num(m.group(1)) if m else 0.0
+
+    # ---- ความถี่ (สำรอง) ----
+    if re.search(r"รายเดือน", text):
+        res["freq_type"], res["freq_val"] = "รายเดือน", 1
+    elif re.search(r"รายสัปดาห์|รายอาทิตย์", text):
+        res["freq_type"], res["freq_val"] = "รายสัปดาห์", 1
+    else:
+        fm = re.search(r"ราย\s*(\d+)\s*วัน", text)
+        res["freq_type"] = "รายวัน"
+        res["freq_val"] = int(fm.group(1)) if fm else 1
+
+    # ---- งวดปัจจุบัน + จุดอ้างอิงปี ----
+    header_period = None
+    pm = re.search(r"งวดที่\s*(\d+)", text)
+    if pm: header_period = int(pm.group(1))
+    res["current_period"] = header_period or 1
+
+    # ---- ตารางวันที่ (ข้ามบรรทัด header ที่มีคำว่า 'วันที่') ----
+    schedule_tuples = []
+    for line in text.splitlines():
+        if "วันที่" in line:   # บรรทัดอ้างอิงงวดปัจจุบัน ไม่ใช่ตาราง
+            continue
+        dm = DATE_TOKEN_RE.search(line)
+        if dm:
+            d = _parse_date_match(dm)
+            if d:
+                schedule_tuples.append(list(d))
+
+    # เติมปีจากจุดอ้างอิง header ถ้ามี (งวดที่ N วันที่ .../.../25xx)
+    for line in text.splitlines():
+        if "วันที่" in line:
+            dm = DATE_TOKEN_RE.search(line)
+            d = _parse_date_match(dm) if dm else None
+            if d and d[2] and header_period and 1 <= header_period <= len(schedule_tuples):
+                schedule_tuples[header_period - 1][2] = d[2]
+            break
+
+    res["period_dates"] = _assign_years([tuple(t) for t in schedule_tuples])
+    res["members"] = _parse_members(text)
+    res["num_hands"] = 1
+    return res
 
 # ====================================================
 # --- การตั้งค่าหน้าจอและ Theme (Sanrio Style) ---
@@ -134,13 +338,13 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         s = next(s for s in user_shares if s["name"] == selected_name)
         share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
         num_hands = int(s.get("num_hands", 1))
-        
+
         hands_data = s.get("hands_data", [])
         if not hands_data and not share_type.startswith("แชร์เปีย"):
             hands_data = [{"period": s.get("my_receive_period", 0), "payment": s.get("my_fixed_payment", 0.0), "amount": s.get("my_receive_amount", 0.0)}]
-        
-        current_due_date = calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"]) if s["current_period"] <= s["total_periods"] else None
-        
+
+        current_due_date = get_period_date(s, s["current_period"]) if s["current_period"] <= s["total_periods"] else None
+
         st.markdown(f"**รูปแบบวงแชร์:** 🏷️ {share_type} | **จำนวนมือที่เล่น:** {num_hands} มือ")
         col1, col2, col3, col4 = st.columns(4)
         paid = sum(float(h["paid"]) for h in s["history"])
@@ -148,21 +352,21 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         col1.metric("จ่ายไปแล้ว", f"{paid:,.2f} ฿")
         col2.metric("ได้รับมาแล้ว", f"{received:,.2f} ฿")
         col3.metric("กำไร/ขาดทุน", f"{received - paid:,.2f} ฿")
-        
+
         if share_type.startswith("แชร์เปีย"):
-            # แก้ไขแล้ว: ดึงดอกเบี้ยสะสมของทุกคนมารวมกันทั้งหมด
+            # ดึงดอกเบี้ยสะสมของทุกคนมารวมกันทั้งหมด
             col4.metric("ดอกเบี้ยสะสม", f"{sum(float(h['bid']) for h in s['history']):,.2f} ฿")
         else:
             total_expected_receive = sum(float(hd["amount"]) for hd in hands_data)
             col4.metric("เงินต้นรวม (เป้าหมาย)", f"{total_expected_receive:,.2f} ฿")
-            
+
         st.info(f"🗓️ **งวดถัดไปวันที่:** {current_due_date.strftime('%d/%m/%Y') if current_due_date else 'จบวงแล้ว'}")
 
         # --- ⚙️ ส่วนจัดการรายละเอียดและลบวงแชร์ ---
-        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/ลบวง)"):
+        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/วันที่/ลบวง)"):
             st.subheader("🛠️ แก้ไขข้อมูลพื้นฐาน")
             edit_num_hands = st.number_input("แก้ไขจำนวนมือที่เล่น:", min_value=1, value=num_hands, step=1, key="edit_num_hands")
-            
+
             new_hands_data_list = []
             if share_type.startswith("แชร์เปีย"):
                 edit_base = st.number_input("แก้ไขยอดส่งฐาน (ต่อ 1 มือ):", min_value=0.0, value=float(s.get("base_payment", 0.0)))
@@ -171,7 +375,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 temp_hands = hands_data.copy()
                 while len(temp_hands) < edit_num_hands:
                     temp_hands.append({"period": 1, "payment": 0.0, "amount": 0.0})
-                
+
                 for i in range(edit_num_hands):
                     st.write(f"**มือที่ {i+1}**")
                     ec1, ec2, ec3 = st.columns(3)
@@ -180,12 +384,31 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     ep_amt = ec3.number_input(f"เงินต้นที่ได้ (มือ {i+1})", min_value=0.0, value=float(temp_hands[i]["amount"]), key=f"eamt_{i}")
                     new_hands_data_list.append({"period": ep_period, "payment": ep_pay, "amount": ep_amt})
 
+            # แก้ไขตารางวันจ่ายจริงต่องวด
+            st.write("🗓️ **แก้ไขวันจ่าย/รับเงินจริงต่องวด** (ถ้าท้าวหยุดรับบางงวด แก้วันที่ตรงนี้ได้)")
+            existing_pd = s.get("period_dates", [])
+            if not existing_pd:
+                existing_pd = []
+                for p in range(1, s["total_periods"] + 1):
+                    gd = get_period_date(s, p)
+                    existing_pd.append(gd.strftime("%Y-%m-%d") if gd else "")
+            pd_df = pd.DataFrame({"งวดที่": list(range(1, len(existing_pd) + 1)), "วันที่ (YYYY-MM-DD)": existing_pd})
+            edited_pd = st.data_editor(pd_df, num_rows="dynamic", use_container_width=True, key="edit_pd")
+
             if st.button("💾 บันทึกการแก้ไขรายละเอียด"):
                 s["num_hands"] = edit_num_hands
                 if share_type.startswith("แชร์เปีย"):
                     s["base_payment"] = edit_base
                 else:
                     s["hands_data"] = new_hands_data_list
+                new_pd = []
+                for _, row in edited_pd.iterrows():
+                    norm = _normalize_date_str(row.get("วันที่ (YYYY-MM-DD)", ""))
+                    if norm: new_pd.append(norm)
+                if new_pd:
+                    s["period_dates"] = new_pd
+                    s["total_periods"] = len(new_pd)
+                    s["start_date"] = new_pd[0]
                 save_data(st.session_state.db)
                 st.success("อัปเดตรายละเอียดเรียบร้อย!")
                 st.rerun()
@@ -205,12 +428,12 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
         if s["current_period"] <= s["total_periods"] or is_waiting_bid:
             display_period = last_record['p'] if is_waiting_bid else s["current_period"]
             st.subheader(f"📝 บันทึกงวดที่ {display_period}")
-            
+
             if share_type.startswith("แชร์เปีย"):
                 base_total = s["base_payment"] * num_hands
                 due = base_total + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
                 times_won = sum(1 for h in s["history"] if h.get("win") == "ฉันเปียเอง")
-                
+
                 if is_waiting_bid:
                     st.info(f"⏳ **คุณจ่ายเงินงวดที่ {display_period} แล้ว กรุณากรอกผลเปียตอนเย็นครับ**")
                     with st.container():
@@ -223,7 +446,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                         if c3.button(f"✅ บันทึกผลเปียงวด {display_period}"):
                             s["history"][-1]["bid"] = bid_amt
                             s["history"][-1]["win"] = "ฉันเปียเอง" if is_me_winning else "คนอื่น"
-                            
+
                             if is_me_winning:
                                 rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", []))
                                 s["history"][-1]["received"] = rec_amt
@@ -232,7 +455,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             else:
                                 if "other_bids" not in s: s["other_bids"] = []
                                 s["other_bids"].append(bid_amt)
-                            
+
                             save_data(st.session_state.db)
                             if not mute_line:
                                 send_line_message(f"🌸 อัปเดตผลเปียวง {s['name']} งวด {display_period}\nคนเปียได้: {'คุณ' if is_me_winning else 'คนอื่น'}\nยอดดอกเบี้ย: {bid_amt:,.2f} ฿")
@@ -247,8 +470,8 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             if not mute_line:
                                 send_line_message(f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอด: {due:,.2f} ฿ (รอผลเปีย)")
                             st.rerun()
-            
-            else: 
+
+            else:
                 if s["current_period"] <= s["total_periods"]:
                     default_pay = sum(float(hd["payment"]) for hd in hands_data)
                     winning_hands = [hd for hd in hands_data if hd["period"] == s["current_period"]]
@@ -285,12 +508,12 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                 due_predict = (s["base_payment"] * num_hands) + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
             else:
                 due_predict = sum(float(hd["payment"]) for hd in hands_data)
-            
+
             start_table_period = s["current_period"]
-            
+
             for p in range(start_table_period, s["total_periods"] + 1):
-                p_date = calculate_due_date(s["start_date"], p, s["freq_type"], s["freq_val"])
-                row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d"), "ยอดส่งรวม": due_predict}
+                p_date = get_period_date(s, p)
+                row = {"งวดที่": p, "วันที่": p_date.strftime("%Y-%m-%d") if p_date else "-", "ยอดส่งรวม": due_predict}
                 if not share_type.startswith("แชร์เปีย"):
                     win_amts = sum(float(hd["amount"]) for hd in hands_data if hd["period"] == p)
                     row["หมายเหตุ"] = f"🎉 รับเงิน ({win_amts:,.2f})" if win_amts > 0 else "-"
@@ -314,55 +537,132 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     st.rerun()
 
 # ====================================================
-# --- เมนู 2: สร้างวงแชร์ใหม่ ---
+# --- เมนู 2: สร้างวงแชร์ใหม่ (วางข้อความประกาศ -> วิเคราะห์อัตโนมัติ) ---
 # ====================================================
 elif menu == "➕ สร้างวงแชร์ใหม่":
     st.title("➕ ตั้งค่างานแชร์ใหม่")
-    col_t1, col_t2 = st.columns(2)
-    share_type = col_t1.radio("รูปแบบวงแชร์ 🏷️", ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"])
-    num_hands = col_t2.number_input("จำนวนมือที่เล่นในวงนี้", min_value=1, step=1, value=1)
-    
-    with st.form("create_form"):
-        name = st.text_input("ชื่อวงแชร์")
-        periods = st.number_input("จำนวนงวดทั้งหมด", min_value=1, step=1)
-        base = 0.0
-        principal = 0.0
-        hands_data = []
-        
-        if share_type == "แชร์เปีย (ประมูลดอกเบี้ย)":
-            principal = st.number_input("ยอดเงินต้นรวมทั้งหมด", min_value=0.0)
-            base = st.number_input("ยอดส่งฐาน (ต่อ 1 มือ)", min_value=0.0)
-            st.info(f"💡 คุณเล่น {num_hands} มือ ยอดส่งฐานรวมจะเป็น: {base * num_hands:,.2f} บาท/งวด")
-        else:
-            st.info("🎯 **ข้อมูลแชร์ขั้นบันได (ระบุรายละเอียดแต่ละมือ)**")
-            for i in range(num_hands):
-                st.write(f"**รายละเอียดของมือที่ {i+1}**")
-                c1, c2, c3 = st.columns(3)
-                p_period = c1.number_input(f"รับเงินงวดที่ (มือ {i+1})", min_value=1, step=1, key=f"p_{i}")
-                p_pay = c2.number_input(f"จ่ายงวดละ (มือ {i+1})", min_value=0.0, key=f"pay_{i}")
-                p_amt = c3.number_input(f"เงินต้นที่ได้ (มือ {i+1})", min_value=0.0, key=f"amt_{i}")
-                hands_data.append({"period": p_period, "payment": p_pay, "amount": p_amt})
+    st.caption("วิธีใช้: วางข้อความประกาศวงจากท้าวแชร์ในช่องด้านล่าง → กด 'วิเคราะห์ข้อความ' "
+               "ระบบจะกรอกข้อมูลให้อัตโนมัติ (รวมถึงวันจ่ายจริงของแต่ละงวด) จากนั้นตรวจ/แก้ส่วนที่ขาดแล้วกดสร้างวง")
 
-        st.write("🗓️ **ตั้งค่าความถี่และการชำระ**")
-        start_date = st.date_input("วันที่เริ่มต้นแชร์งวดแรก")
-        col1, col2 = st.columns(2)
-        freq_type = col1.selectbox("รูปแบบความถี่", ["รายวัน", "รายสัปดาห์", "รายเดือน"])
-        freq_val = col2.number_input(f"ทุกๆ กี่{freq_type.replace('ราย','')}", min_value=1, value=1)
-        
-        submit_btn = st.form_submit_button("💖 สร้างวงแชร์")
-        
-        if submit_btn:
-            if name:
-                new_share = {
-                    "owner": st.session_state.current_user, "share_type": share_type, "name": name, 
-                    "principal": principal, "total_periods": periods, "base_payment": base,
-                    "num_hands": num_hands, "hands_data": hands_data,
-                    "start_date": start_date.strftime("%Y-%m-%d"), "freq_type": freq_type, "freq_val": freq_val,
-                    "current_period": 1, "is_me_won": False, "my_bid_amount": 0.0, "other_bids": [], "history": []
-                }
-                st.session_state.db["shares"].append(new_share)
-                save_data(st.session_state.db)
-                st.success(f"สร้างวงแชร์สำเร็จ! ไปที่เมนู 'วงแชร์ของฉัน' ได้เลย")
+    raw_text = st.text_area("📋 วางข้อความประกาศวงแชร์ที่นี่", height=260,
+                            value=st.session_state.get("c_raw_keep", ""))
+    bcol1, bcol2 = st.columns(2)
+    if bcol1.button("🔍 วิเคราะห์ข้อความ"):
+        st.session_state.c_parsed = parse_share_text(raw_text)
+        st.session_state.c_raw_keep = raw_text
+        st.session_state.c_parse_n = st.session_state.get("c_parse_n", 0) + 1
+        st.success("วิเคราะห์เรียบร้อย! ตรวจสอบ/แก้ไขข้อมูลด้านล่างได้เลย")
+    if bcol2.button("🧹 ล้างข้อมูลที่วิเคราะห์ / เริ่มใหม่"):
+        for k in ["c_parsed", "c_raw_keep"]:
+            st.session_state.pop(k, None)
+        st.session_state.c_parse_n = st.session_state.get("c_parse_n", 0) + 1
+        st.rerun()
+
+    p = st.session_state.get("c_parsed", {}) or {}
+    pn = st.session_state.get("c_parse_n", 0)   # ต่อท้าย key เพื่อรีเฟรชค่า default เมื่อวิเคราะห์ใหม่
+
+    st.divider()
+    st.subheader("📝 ตรวจสอบ & เติมข้อมูลวงแชร์")
+
+    type_options = ["แชร์เปีย (ประมูลดอกเบี้ย)", "แชร์ขั้นบันได (เฉพาะมือของเรา)"]
+    default_type_idx = type_options.index(p["share_type"]) if p.get("share_type") in type_options else 0
+    share_type = st.radio("รูปแบบวงแชร์ 🏷️ (ระบบเดาให้ ปรับได้)", type_options, index=default_type_idx, key=f"c_type_{pn}")
+
+    ca, cb = st.columns(2)
+    name = ca.text_input("ชื่อวงแชร์", value=p.get("name", ""), key=f"c_name_{pn}")
+    num_hands = cb.number_input("จำนวนมือที่เราเล่นในวงนี้", min_value=1, step=1,
+                                value=int(p.get("num_hands", 1)), key=f"c_hands_{pn}")
+
+    cc, cd = st.columns(2)
+    principal = cc.number_input("ยอดเงินต้นรวม (ต้น)", min_value=0.0,
+                                value=float(p.get("principal", 0.0)), key=f"c_principal_{pn}")
+    current_period = cd.number_input("ตอนนี้อยู่งวดที่ (งวดถัดไปที่จะจ่าย)", min_value=1, step=1,
+                                     value=int(p.get("current_period", 1)), key=f"c_curper_{pn}")
+
+    # ---------- ตารางวันจ่ายจริง ----------
+    st.write("🗓️ **ตารางวันจ่าย/รับเงินจริงของแต่ละงวด** — แก้ไขได้ ถ้าระบบอ่านผิด/มีงวดที่ท้าวหยุดรับ")
+    period_dates_parsed = p.get("period_dates", [])
+    gen_periods = max(1, len(period_dates_parsed))
+    if period_dates_parsed:
+        sched_df = pd.DataFrame({"งวดที่": list(range(1, len(period_dates_parsed) + 1)),
+                                 "วันที่ (YYYY-MM-DD)": period_dates_parsed})
+    else:
+        st.info("ไม่พบตารางวันที่ในข้อความ — กรอกจำนวนงวด แล้วพิมพ์วันที่เอง (รูปแบบ YYYY-MM-DD หรือ วัน/เดือน)")
+        gen_periods = st.number_input("จำนวนงวดทั้งหมด", min_value=1, step=1, value=1, key=f"c_genper_{pn}")
+        sched_df = pd.DataFrame({"งวดที่": list(range(1, int(gen_periods) + 1)),
+                                 "วันที่ (YYYY-MM-DD)": [""] * int(gen_periods)})
+    edited_sched = st.data_editor(sched_df, num_rows="dynamic", use_container_width=True, key=f"c_sched_{pn}")
+
+    # ---------- ความถี่สำรอง ----------
+    with st.expander("⚙️ ความถี่ (ใช้สำรองเฉพาะกรณีไม่มีวันที่ในตาราง)"):
+        freq_types = ["รายวัน", "รายสัปดาห์", "รายเดือน"]
+        fidx = freq_types.index(p.get("freq_type", "รายวัน")) if p.get("freq_type") in freq_types else 0
+        fc1, fc2 = st.columns(2)
+        freq_type = fc1.selectbox("รูปแบบความถี่", freq_types, index=fidx, key=f"c_freqtype_{pn}")
+        freq_val = fc2.number_input("ทุกๆ กี่หน่วย", min_value=1, value=int(p.get("freq_val", 1)), key=f"c_freqval_{pn}")
+
+    # ---------- ข้อมูลเฉพาะประเภท ----------
+    base_payment = 0.0
+    hands_data = []
+    start_bid = float(p.get("start_bid", 0.0))
+    admin_fee = float(p.get("admin_fee", 0.0))
+
+    if share_type.startswith("แชร์เปีย"):
+        bc1, bc2 = st.columns(2)
+        base_payment = bc1.number_input("ยอดส่งฐาน ต่อ 1 มือ (ส่งมือละ)", min_value=0.0,
+                                        value=float(p.get("base_payment", 0.0)), key=f"c_base_{pn}")
+        start_bid = bc2.number_input("ดอกเริ่มต้น/เปียขั้นต่ำ (เก็บไว้อ้างอิง)", min_value=0.0,
+                                     value=start_bid, key=f"c_startbid_{pn}")
+        st.info(f"💡 เล่น {int(num_hands)} มือ → ยอดส่งฐานรวม {base_payment * num_hands:,.2f} บาท/งวด "
+                f"(ยังไม่รวมดอกที่ต้องจ่ายเองตอนเปียได้)")
+    else:
+        admin_fee = st.number_input("ค่าดูแล (ถ้ามี)", min_value=0.0, value=admin_fee, key=f"c_admin_{pn}")
+        if p.get("members"):
+            with st.expander("📋 รายชื่อ/ตารางที่ระบบอ่านได้จากข้อความ (ไว้ดูประกอบการเลือกมือของเรา)"):
+                st.dataframe(pd.DataFrame(p["members"]), use_container_width=True)
+        st.write("🎯 **ระบุรายละเอียดเฉพาะ 'มือของเรา' (แชร์ขั้นบันได)**")
+        total_p_now = max(1, len(edited_sched))
+        for i in range(int(num_hands)):
+            st.write(f"**มือที่ {i+1}**")
+            h1, h2, h3 = st.columns(3)
+            hp = h1.number_input(f"รับเงินงวดที่ (มือ {i+1})", min_value=1, max_value=total_p_now, step=1,
+                                 value=min(i + 1, total_p_now), key=f"c_hp_{i}_{pn}")
+            hpay = h2.number_input(f"จ่ายงวดละ (มือ {i+1})", min_value=0.0, value=0.0, key=f"c_hpay_{i}_{pn}")
+            hamt = h3.number_input(f"เงินต้นที่ได้รับ (มือ {i+1})", min_value=0.0,
+                                   value=float(principal), key=f"c_hamt_{i}_{pn}")
+            hands_data.append({"period": int(hp), "payment": float(hpay), "amount": float(hamt)})
+
+    # ---------- สร้างวง ----------
+    st.divider()
+    if st.button("💖 สร้างวงแชร์"):
+        final_dates = []
+        for _, row in edited_sched.iterrows():
+            norm = _normalize_date_str(row.get("วันที่ (YYYY-MM-DD)", ""))
+            if norm:
+                final_dates.append(norm)
+
+        if not name:
+            st.error("กรุณากรอกชื่อวงแชร์ก่อนครับ")
+        else:
+            total_periods = len(final_dates) if final_dates else int(gen_periods)
+            start_date_str = final_dates[0] if final_dates else date.today().strftime("%Y-%m-%d")
+            new_share = {
+                "owner": st.session_state.current_user, "share_type": share_type, "name": name,
+                "principal": float(principal), "total_periods": int(total_periods), "base_payment": float(base_payment),
+                "num_hands": int(num_hands), "hands_data": hands_data,
+                "start_date": start_date_str, "freq_type": freq_type, "freq_val": int(freq_val),
+                "period_dates": final_dates,
+                "start_bid": float(start_bid), "admin_fee": float(admin_fee),
+                "current_period": int(current_period), "is_me_won": False, "my_bid_amount": 0.0,
+                "other_bids": [], "history": [], "source_text": st.session_state.get("c_raw_keep", "")
+            }
+            st.session_state.db["shares"].append(new_share)
+            save_data(st.session_state.db)
+            for k in ["c_parsed", "c_raw_keep"]:
+                st.session_state.pop(k, None)
+            st.session_state.c_parse_n = st.session_state.get("c_parse_n", 0) + 1
+            st.success(f"สร้างวงแชร์ '{name}' สำเร็จ! ({total_periods} งวด) "
+                       f"ไปที่เมนู 'วงแชร์ของฉัน' ได้เลย 🎉")
 
 # ====================================================
 # --- เมนู 3: สรุปภาพรวม ---
@@ -372,10 +672,10 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     colA, colB = st.columns(2)
     start_date = colA.date_input("ตั้งแต่วันที่", value=datetime(2024, 1, 1))
     end_date = colB.date_input("ถึงวันที่", value=datetime.now())
-    
+
     total_paid, total_received = 0, 0
     summary_data = []
-    
+
     for s in user_shares:
         share_paid, share_received = 0, 0
         for h in s["history"]:
@@ -384,28 +684,28 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                 if start_date <= h_date <= end_date:
                     share_paid += float(h["paid"])
                     share_received += float(h["received"])
-            except: pass 
+            except: pass
         t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
         summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
         total_paid += share_paid
         total_received += share_received
-        
+
     st.divider()
     c1, c2, c3 = st.columns(3)
     c1.metric("ยอดจ่ายรวมทั้งหมด", f"{total_paid:,.2f} ฿")
     c2.metric("ยอดรับรวมทั้งหมด", f"{total_received:,.2f} ฿")
     c3.metric("กำไรสุทธิ", f"{total_received - total_paid:,.2f} ฿", delta=total_received - total_paid)
-    
+
     if summary_data:
         st.dataframe(pd.DataFrame(summary_data).style.format({"ยอดจ่ายรวม": "{:,.2f}", "ยอดรับรวม": "{:,.2f}", "กำไร/ขาดทุน": "{:,.2f}"}), use_container_width=True)
-        
+
     st.divider()
     if st.button("🔔 ทดสอบส่ง LINE ยอดที่ต้องจ่าย 'วันนี้' (ส่งหาทุกคน)"):
         today = date.today()
         due_msgs = []
         for s in user_shares:
             if s["current_period"] <= s["total_periods"]:
-                if calculate_due_date(s["start_date"], s["current_period"], s["freq_type"], s["freq_val"]) == today:
+                if get_period_date(s, s["current_period"]) == today:
                     num_h = int(s.get("num_hands", 1))
                     if s.get("share_type", "แชร์เปีย").startswith("แชร์เปีย"):
                         amt = (s["base_payment"] * num_h) + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
