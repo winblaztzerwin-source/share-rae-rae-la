@@ -39,23 +39,25 @@ def get_gsheet_client():
 
 def load_data():
     try:
-        client = get_gsheet_client()
-        sheet = client.open_by_url(SHEET_URL).sheet1
-        data_str = sheet.acell('A1').value
-        if data_str:
-            data = json.loads(data_str)
-            if "users" not in data: data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
-            return data
+        with st.spinner("🔄 กำลังโหลดข้อมูลจาก Google Sheets..."):
+            client = get_gsheet_client()
+            sheet = client.open_by_url(SHEET_URL).sheet1
+            data_str = sheet.acell('A1').value
+            if data_str:
+                data = json.loads(data_str)
+                if "users" not in data: data["users"] = ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"]
+                return data
     except Exception as e:
         st.warning("⚠️ รอการเชื่อมต่อ Google Sheets...")
     return {"users": ["นวคุณ", "วิน", "อาร์ต", "สิ", "อั๋น"], "shares": []}
 
 def save_data(data):
     try:
-        client = get_gsheet_client()
-        sheet = client.open_by_url(SHEET_URL).sheet1
-        json_str = json.dumps(data, ensure_ascii=False)
-        sheet.update('A1', [[json_str]])
+        with st.spinner("💾 กำลังบันทึกลง Google Sheets..."):
+            client = get_gsheet_client()
+            sheet = client.open_by_url(SHEET_URL).sheet1
+            json_str = json.dumps(data, ensure_ascii=False)
+            sheet.update('A1', [[json_str]])
     except Exception as e:
         st.error(f"❌ ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้: {e}")
 
@@ -189,6 +191,47 @@ def compute_status(s):
 def status_pill_html(s):
     label, color = compute_status(s)
     return f"<span class='pill' style='background:{color};'>{label}</span>"
+
+# ---- สี/อิโมจิประจำวง ----
+THEME_EMOJIS = ["🎀", "🟢", "🟠", "🔴", "🟡", "🔵", "🟣", "🍋", "🥐", "🍊", "🍓", "🌸", "🌼", "🐰", "🐻", "⭐"]
+
+def guess_theme(text):
+    """เดาอิโมจิ/สีประจำวงจากชื่อหรือข้อความประกาศ"""
+    t = text or ""
+    table = [
+        (["เขียว", "มะนาว", "lime", "เลม่อน"], ("🍋", "#43A047")),
+        (["ส้ม", "orange"], ("🟠", "#FB8C00")),
+        (["แดง"], ("🔴", "#E53935")),
+        (["ชมพู", "พิงค์", "pink"], ("🌸", "#FF69B4")),
+        (["ฟ้า", "น้ำเงิน", "blue"], ("🔵", "#1E88E5")),
+        (["ม่วง", "purple"], ("🟣", "#8E24AA")),
+        (["เหลือง", "ทอง", "gold"], ("🟡", "#FBC02D")),
+        (["ครัวซอง", "ขนมปัง", "เบเกอ", "ขนม"], ("🥐", "#D7A86E")),
+        (["สตรอ", "strawberry"], ("🍓", "#E91E63")),
+    ]
+    for kws, theme in table:
+        if any(k in t for k in kws):
+            return theme
+    return ("🎀", "#FF69B4")
+
+def get_emoji(s):
+    return s.get("emoji") or guess_theme(s.get("name", ""))[0]
+
+def get_color(s):
+    return s.get("color") or guess_theme(s.get("name", ""))[1]
+
+def _text_on(hex_color):
+    """เลือกสีตัวอักษรให้ตัดกับพื้นหลัง (เข้มบนสีอ่อน / ขาวบนสีเข้ม)"""
+    try:
+        h = str(hex_color).lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return "#3a2a2a" if (0.299 * r + 0.587 * g + 0.114 * b) > 165 else "white"
+    except:
+        return "white"
+
+def circle_chip_html(s):
+    c = get_color(s)
+    return f"<span class='chip' style='background:{c};color:{_text_on(c)};'>{get_emoji(s)} {s.get('name','')}</span>"
 
 def project_circle(s):
     """พยากรณ์ ยอดจ่าย/รับ/กำไร เมื่อเล่นจนจบวง
@@ -413,6 +456,7 @@ def parse_share_text(text):
     res["period_dates"] = _assign_years([tuple(t) for t in schedule_tuples])
     res["members"] = _parse_members(text)
     res["num_hands"] = 1
+    res["emoji"], res["color"] = guess_theme(text)
     return res
 
 # ====================================================
@@ -422,9 +466,16 @@ st.set_page_config(page_title="Share rae rae la", layout="wide", page_icon="🎀
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Itim&family=Mali:wght@400;600&display=swap');
-    html, body, [class*="css"], .stApp, .stMarkdown, p, div, span, label,
-    input, textarea, select, button, .stButton>button, .stMetric {
+    html, body, .stApp, .stMarkdown, .stMarkdown p, p, label, h1, h2, h3, h4,
+    .stButton>button, input, textarea, select,
+    [data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-testid="stWidgetLabel"] {
         font-family: 'Itim', 'Mali', 'Sukhumvit Set', sans-serif !important;
+    }
+    /* คืนฟอนต์ไอคอนของ Streamlit ไม่ให้ Itim ทับ (กันคำว่า arrow_right โผล่บน expander/ลูกศร metric) */
+    span[data-testid="stIconMaterial"], .material-icons, .material-icons-outlined,
+    .material-symbols-outlined, .material-symbols-rounded,
+    [class*="material-symbols"], [class*="material-icons"] {
+        font-family: 'Material Symbols Outlined','Material Symbols Rounded','Material Icons Outlined','Material Icons' !important;
     }
     .main, .stApp { background-color: #FFF0F5; }
     .stButton>button { background-color: #FFB6C1; color: #5a2a3a; border-radius: 20px; border: 2px solid #FF69B4; font-weight: 600; transition: all .15s ease; }
@@ -432,6 +483,7 @@ st.markdown("""
     h1, h2, h3 { color: #FF1493 !important; }
     .stMetric { background-color: white; padding: 15px; border-radius: 18px; box-shadow: 2px 4px 14px rgba(255, 105, 180, 0.18); }
     .pill { display:inline-block; padding:4px 14px; border-radius:999px; color:white; font-size:0.9rem; font-weight:600; box-shadow: 1px 2px 6px rgba(0,0,0,0.12); }
+    .chip { display:inline-block; padding:5px 16px; border-radius:999px; font-weight:600; font-size:1.05rem; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); margin: 2px 0; }
     .stProgress > div > div > div > div { background-color: #FF69B4 !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -487,10 +539,14 @@ if menu == "🏠 วงแชร์ของฉัน":
     if not user_shares:
         st.info("คุณยังไม่มีวงแชร์ในระบบ ไปสร้างวงแรกได้ที่เมนู 'สร้างวงแชร์ใหม่' ทางซ้ายมือครับ")
     else:
-        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", [s["name"] for s in user_shares])
+        name_to_share = {x["name"]: x for x in user_shares}
+        selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", list(name_to_share.keys()),
+                                     format_func=lambda n: f"{get_emoji(name_to_share[n])} {n}")
         s = next(s for s in user_shares if s["name"] == selected_name)
         share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
         num_hands = int(s.get("num_hands", 1))
+
+        st.markdown(circle_chip_html(s), unsafe_allow_html=True)
 
         hands_data = s.get("hands_data", [])
         if not hands_data and not share_type.startswith("แชร์เปีย"):
@@ -558,9 +614,17 @@ if menu == "🏠 วงแชร์ของฉัน":
                     use_container_width=True, hide_index=True)
 
         # --- ⚙️ ส่วนจัดการรายละเอียดและลบวงแชร์ ---
-        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/วันที่/ลบวง)"):
+        with st.expander("⚙️ จัดการรายละเอียดวงแชร์ (แก้ไขจำนวนมือ/วันที่/สี/ลบวง)"):
             st.subheader("🛠️ แก้ไขข้อมูลพื้นฐาน")
             edit_num_hands = st.number_input("แก้ไขจำนวนมือที่เล่น:", min_value=1, value=num_hands, step=1, key="edit_num_hands")
+
+            st.write("🎨 **สี/อิโมจิประจำวง**")
+            mecol1, mecol2 = st.columns(2)
+            _cur_emoji = get_emoji(s)
+            _e_idx = THEME_EMOJIS.index(_cur_emoji) if _cur_emoji in THEME_EMOJIS else 0
+            edit_emoji = mecol1.selectbox("อิโมจิ", THEME_EMOJIS, index=_e_idx, key="edit_emoji")
+            edit_color = mecol2.color_picker("สี", value=get_color(s), key="edit_color")
+            st.markdown(f"<span class='chip' style='background:{edit_color};color:{_text_on(edit_color)};'>{edit_emoji} {s['name']}</span>", unsafe_allow_html=True)
 
             new_hands_data_list = []
             if share_type.startswith("แชร์เปีย"):
@@ -592,6 +656,8 @@ if menu == "🏠 วงแชร์ของฉัน":
 
             if st.button("💾 บันทึกการแก้ไขรายละเอียด"):
                 s["num_hands"] = edit_num_hands
+                s["emoji"] = edit_emoji
+                s["color"] = edit_color
                 if share_type.startswith("แชร์เปีย"):
                     s["base_payment"] = edit_base
                 else:
@@ -767,7 +833,7 @@ elif menu == "💰 จ่ายวันนี้":
                     win_amt = sum(float(hd["amount"]) for hd in s.get("hands_data", []) if hd["period"] == s["current_period"])
                     if win_amt > 0:
                         extra = f" — 🎉 งวดนี้รับ {win_amt:,.0f} ฿"
-                label = f"{tag}  **{s['name']}**  · งวด {s['current_period']} ({d.strftime('%d/%m')}) · {num_hands} มือ · จ่าย {amt:,.0f} ฿{extra}"
+                label = f"{tag} {get_emoji(s)} **{s['name']}**  · งวด {s['current_period']} ({d.strftime('%d/%m')}) · {num_hands} มือ · จ่าย {amt:,.0f} ฿{extra}"
                 picks[s["name"]] = st.checkbox(label, value=True, key=f"paychk_{s['name']}")
             submitted = st.form_submit_button("💾 บันทึกการจ่ายที่เลือกทั้งหมด")
 
@@ -799,7 +865,7 @@ elif menu == "💰 จ่ายวันนี้":
             num_hands = int(s.get("num_hands", 1))
             times_won = sum(1 for h in s["history"] if h.get("win") == "ฉันเปียเอง")
             period = s["history"][-1].get("p", "?")
-            st.markdown(f"**{s['name']}** · งวด {period}")
+            st.markdown(f"**{get_emoji(s)} {s['name']}** · งวด {period}")
             wc1, wc2, wc3 = st.columns([1.2, 1.2, 1])
             bid_amt = wc1.number_input("ยอดดอกที่ชนะ (บาท)", min_value=0.0, key=f"wbid_{s['name']}")
             can_win = times_won < num_hands
@@ -853,6 +919,13 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
     name = ca.text_input("ชื่อวงแชร์", value=p.get("name", ""), key=f"c_name_{pn}")
     num_hands = cb.number_input("จำนวนมือที่เราเล่นในวงนี้", min_value=1, step=1,
                                 value=int(p.get("num_hands", 1)), key=f"c_hands_{pn}")
+
+    ce, cf = st.columns(2)
+    _def_emoji = p.get("emoji", "🎀")
+    _emoji_idx = THEME_EMOJIS.index(_def_emoji) if _def_emoji in THEME_EMOJIS else 0
+    emoji = ce.selectbox("อิโมจิประจำวง", THEME_EMOJIS, index=_emoji_idx, key=f"c_emoji_{pn}")
+    color = cf.color_picker("สีประจำวง", value=p.get("color", "#FF69B4"), key=f"c_color_{pn}")
+    st.markdown(f"<span class='chip' style='background:{color};color:{_text_on(color)};'>{emoji} {name or 'ชื่อวง'}</span>", unsafe_allow_html=True)
 
     cc, cd = st.columns(2)
     principal = cc.number_input("ยอดเงินต้นรวม (ต้น)", min_value=0.0,
@@ -929,6 +1002,7 @@ elif menu == "➕ สร้างวงแชร์ใหม่":
             start_date_str = final_dates[0] if final_dates else date.today().strftime("%Y-%m-%d")
             new_share = {
                 "owner": st.session_state.current_user, "share_type": share_type, "name": name,
+                "emoji": emoji, "color": color,
                 "principal": float(principal), "total_periods": int(total_periods), "base_payment": float(base_payment),
                 "num_hands": int(num_hands), "hands_data": hands_data,
                 "start_date": start_date_str, "freq_type": freq_type, "freq_val": int(freq_val),
@@ -967,7 +1041,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                     share_received += float(h["received"])
             except: pass
         t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
-        summary_data.append({"ชื่อวงแชร์": s["name"], "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
+        summary_data.append({"ชื่อวงแชร์": f"{get_emoji(s)} {s['name']}", "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
         total_paid += share_paid
         total_received += share_received
 
@@ -1007,7 +1081,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
     proj_rows = []
     for s in user_shares:
         pj = project_circle(s)
-        proj_rows.append({"ชื่อวงแชร์": s["name"], "จ่ายทั้งหมด(คาด)": pj["pay"],
+        proj_rows.append({"ชื่อวงแชร์": f"{get_emoji(s)} {s['name']}", "จ่ายทั้งหมด(คาด)": pj["pay"],
                           "รับทั้งหมด(คาด)": pj["receive"], "กำไรคาดการณ์": pj["profit"]})
     if proj_rows:
         pdf = pd.DataFrame(proj_rows)
