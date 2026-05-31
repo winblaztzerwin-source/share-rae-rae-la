@@ -81,6 +81,78 @@ def get_period_date(s, period):
         return None
 
 # ====================================================
+# 🧰 ฟังก์ชันช่วย: คำนวณยอด / จ่ายเงิน / ย้อนกลับ
+# ====================================================
+def compute_due_amount(s):
+    """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ)"""
+    num_hands = int(s.get("num_hands", 1))
+    if s.get("share_type", "").startswith("แชร์เปีย"):
+        return s.get("base_payment", 0) * num_hands
+    return sum(float(hd["payment"]) for hd in s.get("hands_data", []))
+
+def pay_one_period(s):
+    """บันทึกการจ่าย 1 งวด (งวดปัจจุบัน) คืน (line_message, note_text)"""
+    num_hands = int(s.get("num_hands", 1))
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    period = s["current_period"]
+    if s.get("share_type", "").startswith("แชร์เปีย"):
+        due = s.get("base_payment", 0) * num_hands
+        s["history"].append({"p": period, "date": today_str, "paid": due, "received": 0, "bid": 0, "win": "รอผลเปีย"})
+        s["current_period"] += 1
+        msg = f"🌸 บัญชี: {st.session_state.current_user}\nจ่ายวง {s['name']} งวด {period} แล้ว!\nยอด: {due:,.2f} ฿ (รอผลเปีย)"
+        return msg, f"จ่ายวง {s['name']} งวด {period} แล้ว (อย่าลืมไปกรอกผลเปียที่หน้า 'หน้าแรก & วงแชร์ของฉัน')"
+    else:
+        hands_data = s.get("hands_data", [])
+        default_pay = sum(float(hd["payment"]) for hd in hands_data)
+        winning_hands = [hd for hd in hands_data if hd["period"] == period]
+        rec_amt = sum(float(hd["amount"]) for hd in winning_hands)
+        win = "ฉันเปียเอง" if winning_hands else "คนอื่น"
+        s["history"].append({"p": period, "date": today_str, "paid": default_pay, "received": rec_amt, "bid": 0, "win": win})
+        s["current_period"] += 1
+        if rec_amt > 0:
+            msg = f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {period} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿\n🎉 ได้รับเงินแชร์: {rec_amt:,.2f} ฿"
+        else:
+            msg = f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {period} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿"
+        return msg, f"จ่ายวง {s['name']} งวด {period} แล้ว"
+
+def undo_last_period(s):
+    """ย้อนกลับการบันทึกงวดล่าสุด (กรณีกดจ่ายผิด/ยังไม่ถึงกำหนด) คืน True ถ้าสำเร็จ"""
+    if not s.get("history"):
+        return False
+    rec = s["history"].pop()
+    s["current_period"] = max(1, s["current_period"] - 1)
+    if s.get("share_type", "").startswith("แชร์เปีย"):
+        win = rec.get("win")
+        if win == "คนอื่น":
+            ob = s.get("other_bids", [])
+            if ob:
+                ob.pop()
+        elif win == "ฉันเปียเอง":
+            s["my_bid_amount"] = max(0.0, float(s.get("my_bid_amount", 0)) - float(rec.get("bid", 0)))
+        s["is_me_won"] = any(h.get("win") == "ฉันเปียเอง" for h in s["history"])
+    return True
+
+def render_undo_section(shares, key_prefix):
+    """แสดงส่วน 'ย้อนกลับงวดล่าสุด' ใช้ซ้ำได้หลายหน้า"""
+    payable = [s for s in shares if s.get("history")]
+    if not payable:
+        st.info("ยังไม่มีวงที่บันทึกการจ่าย จึงไม่มีอะไรให้ย้อนกลับ")
+        return
+    sel = st.selectbox("เลือกวงที่ต้องการย้อนกลับ:", [s["name"] for s in payable], key=f"{key_prefix}_undo_sel")
+    s = next(x for x in payable if x["name"] == sel)
+    last = s["history"][-1]
+    st.write(f"งวดล่าสุดที่บันทึก: **งวดที่ {last.get('p', '?')}** | วันที่บันทึก {last.get('date', '-')} | "
+             f"จ่าย {float(last.get('paid', 0)):,.2f} ฿ | รับ {float(last.get('received', 0)):,.2f} ฿ | สถานะ: {last.get('win', '-')}")
+    confirm = st.checkbox("✔️ ยืนยันว่าต้องการย้อนกลับงวดนี้ (ข้อมูลงวดล่าสุดจะถูกลบ)", key=f"{key_prefix}_undo_confirm")
+    if st.button("↩️ ย้อนกลับงวดล่าสุด", key=f"{key_prefix}_undo_btn"):
+        if not confirm:
+            st.warning("กรุณาติ๊กยืนยันก่อนครับ")
+        elif undo_last_period(s):
+            save_data(st.session_state.db)
+            st.success(f"ย้อนกลับงวดล่าสุดของ '{s['name']}' เรียบร้อย! ตอนนี้กลับไปที่งวด {s['current_period']}")
+            st.rerun()
+
+# ====================================================
 # 🧠 ตัวช่วยแกะข้อความประกาศวงแชร์ (Parser)
 # ====================================================
 DATE_TOKEN_RE = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2}|[ก-๙\.]{2,8})(?:\s*/\s*(\d{2,4}))?")
@@ -322,7 +394,7 @@ st.sidebar.divider()
 mute_line = st.sidebar.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
 st.sidebar.divider()
 
-menu = st.sidebar.radio("ไปที่หน้า:", ["🏠 หน้าแรก & วงแชร์ของฉัน", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
+menu = st.sidebar.radio("ไปที่หน้า:", ["🏠 หน้าแรก & วงแชร์ของฉัน", "📅 จ่ายวันนี้", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
 
 user_shares = [s for s in st.session_state.db["shares"] if s.get("owner") == st.session_state.current_user]
 
@@ -430,8 +502,7 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
             st.subheader(f"📝 บันทึกงวดที่ {display_period}")
 
             if share_type.startswith("แชร์เปีย"):
-                base_total = s["base_payment"] * num_hands
-                due = base_total + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
+                due = s["base_payment"] * num_hands
                 times_won = sum(1 for h in s["history"] if h.get("win") == "ฉันเปียเอง")
 
                 if is_waiting_bid:
@@ -448,7 +519,9 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                             s["history"][-1]["win"] = "ฉันเปียเอง" if is_me_winning else "คนอื่น"
 
                             if is_me_winning:
-                                rec_amt = (s["base_payment"] * s["total_periods"]) + sum(s.get("other_bids", []))
+                                # ✅ กฎวงเปีย: ผู้เปียได้ = เงินต้น(ต้น) + ดอกของคนที่เปียก่อนหน้าทั้งหมด
+                                prev_interest = sum(s.get("other_bids", []))
+                                rec_amt = float(s.get("principal", 0)) + prev_interest
                                 s["history"][-1]["received"] = rec_amt
                                 s["is_me_won"] = True
                                 s["my_bid_amount"] = s.get("my_bid_amount", 0) + bid_amt
@@ -499,13 +572,17 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                                     send_line_message(f"🎀 บัญชี: {st.session_state.current_user}\nส่งแชร์วง {s['name']} งวด {s['current_period']-1} แล้ว!\nยอดส่ง: {default_pay:,.2f} ฿")
                                 st.rerun()
 
+        if s["history"]:
+            with st.expander("↩️ เผลอกดจ่ายผิด? ย้อนกลับงวดล่าสุดของวงนี้"):
+                render_undo_section([s], "home")
+
         st.divider()
         colA, colB = st.columns(2)
         with colA:
             st.subheader("🗓️ ตารางชำระเงินล่วงหน้า")
             future_schedule = []
             if share_type.startswith("แชร์เปีย"):
-                due_predict = (s["base_payment"] * num_hands) + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
+                due_predict = s["base_payment"] * num_hands
             else:
                 due_predict = sum(float(hd["payment"]) for hd in hands_data)
 
@@ -535,6 +612,57 @@ if menu == "🏠 หน้าแรก & วงแชร์ของฉัน":
                     save_data(st.session_state.db)
                     st.success("อัปเดตประวัติเรียบร้อย!")
                     st.rerun()
+
+# ====================================================
+# --- เมนู: จ่ายวันนี้ (เฉพาะวงที่ถึง/เลยกำหนด) ---
+# ====================================================
+elif menu == "📅 จ่ายวันนี้":
+    st.title("📅 แชร์ที่ต้องจ่ายวันนี้")
+    today = date.today()
+    st.caption(f"วันนี้ {today.strftime('%d/%m/%Y')} — แสดงเฉพาะวงที่ถึง/เลยกำหนดจ่าย เพื่อกันกดจ่ายผิดวง")
+
+    waiting = [s for s in user_shares if s.get("history") and s["history"][-1].get("win") == "รอผลเปีย"]
+    if waiting:
+        st.warning("⏳ วงที่จ่ายแล้วแต่ยังไม่กรอกผลเปีย: " + ", ".join(x["name"] for x in waiting) +
+                   " (ไปกรอกผลที่หน้า 'หน้าแรก & วงแชร์ของฉัน')")
+
+    due_list = []
+    for s in user_shares:
+        if s["current_period"] <= s["total_periods"]:
+            d = get_period_date(s, s["current_period"])
+            if d and d <= today:
+                due_list.append((s, d))
+
+    if not due_list:
+        st.success("🎉 วันนี้ไม่มีวงที่ต้องจ่ายแล้ว สบายใจได้เลย!")
+    else:
+        st.write(f"มีทั้งหมด **{len(due_list)} วง** ที่ถึงกำหนด")
+        for s, d in due_list:
+            num_hands = int(s.get("num_hands", 1))
+            is_pia = s.get("share_type", "").startswith("แชร์เปีย")
+            due_amt = compute_due_amount(s)
+            overdue = d < today
+            with st.container():
+                tag = "🔴 เลยกำหนดแล้ว" if overdue else "🟢 ครบกำหนดวันนี้"
+                st.markdown(f"### {s['name']} &nbsp; {tag}")
+                st.write(f"งวดที่ **{s['current_period']}** | กำหนดจ่าย **{d.strftime('%d/%m/%Y')}** | จำนวน {num_hands} มือ")
+                if not is_pia:
+                    win_amt = sum(float(hd["amount"]) for hd in s.get("hands_data", []) if hd["period"] == s["current_period"])
+                    if win_amt > 0:
+                        st.success(f"🎉 งวดนี้ถึงคิวรับเงินของคุณ! รับเงินต้น {win_amt:,.2f} ฿")
+                note_pia = " *(ยังไม่รวมดอก ถ้าเปียได้ค่อยกรอกเพิ่มทีหลัง)*" if is_pia else ""
+                st.write(f"💸 ยอดที่ต้องจ่าย: **{due_amt:,.2f} ฿**{note_pia}")
+                if st.button(f"✅ ยืนยันจ่ายวง '{s['name']}'", key=f"paytoday_{s['name']}"):
+                    msg, note = pay_one_period(s)
+                    save_data(st.session_state.db)
+                    if not mute_line:
+                        send_line_message(msg)
+                    st.success(note)
+                    st.rerun()
+            st.markdown("---")
+
+    with st.expander("↩️ เผลอกดจ่ายผิดวง? ย้อนกลับงวดล่าสุดได้ที่นี่"):
+        render_undo_section(user_shares, "today")
 
 # ====================================================
 # --- เมนู 2: สร้างวงแชร์ใหม่ (วางข้อความประกาศ -> วิเคราะห์อัตโนมัติ) ---
@@ -708,7 +836,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                 if get_period_date(s, s["current_period"]) == today:
                     num_h = int(s.get("num_hands", 1))
                     if s.get("share_type", "แชร์เปีย").startswith("แชร์เปีย"):
-                        amt = (s["base_payment"] * num_h) + sum(float(h["bid"]) for h in s["history"] if h.get("win") == "ฉันเปียเอง")
+                        amt = s["base_payment"] * num_h
                         due_msgs.append(f"- {s['name']} ({num_h} มือ): {amt:,.2f} ฿")
                     else:
                         amt = sum(float(hd["payment"]) for hd in s.get("hands_data", []))
