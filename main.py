@@ -86,14 +86,59 @@ def get_period_date(s, period):
 # ====================================================
 # 🧰 ฟังก์ชันช่วย: คำนวณยอด / จ่ายเงิน / ย้อนกลับ
 # ====================================================
+def _infer_base_per_hand(s, num_hands):
+    """เดา 'ยอดส่งฐานต่อมือ' จากประวัติ เมื่อ base_payment เป็น 0
+    ใช้ยอดจ่ายของงวด 'คนอื่น' งวดแรก (ก่อนเราเปียได้) = ฐาน×จำนวนมือ"""
+    for h in s.get("history", []):
+        if str(h.get("win", "")).strip() == "คนอื่น":
+            return float(h.get("paid", 0) or 0) / max(1, num_hands)
+    if s.get("history"):
+        return float(s["history"][0].get("paid", 0) or 0) / max(1, num_hands)
+    return 0.0
+
+def _base_per_hand(s, num_hands):
+    base = float(s.get("base_payment", 0) or 0)
+    return base if base > 0 else _infer_base_per_hand(s, num_hands)
+
+def _clean_history(records):
+    """ทำความสะอาดประวัติที่แก้ผ่านตาราง: แปลงตัวเลขเป็น float, ตัดช่องว่างคำสถานะ
+    (กันปัญหา numpy type ตอนเซฟ และคำว่า 'ฉันเปียเอง' ที่มีช่องว่างเลยจับไม่ตรง)"""
+    out = []
+    for h in records:
+        hh = dict(h)
+        for k in ("paid", "received", "bid"):
+            try:
+                hh[k] = float(hh.get(k, 0) or 0)
+            except:
+                hh[k] = 0.0
+        try:
+            hh["p"] = int(float(hh.get("p", 0) or 0))
+        except:
+            pass
+        hh["win"] = str(hh.get("win", "")).strip()
+        hh["date"] = str(hh.get("date", "")).strip()
+        out.append(hh)
+    return out
+
+def sync_derived_from_history(s):
+    """คำนวณค่าที่สืบทอด (other_bids/is_me_won/my_bid_amount) ใหม่จากประวัติ
+    เรียกหลังแก้ตารางประวัติ เพื่อให้การคิดดอก/พยากรณ์ตรงกับข้อมูลจริง"""
+    if not s.get("share_type", "").startswith("แชร์เปีย"):
+        return
+    hist = s.get("history", [])
+    s["other_bids"] = [float(h.get("bid", 0) or 0) for h in hist if str(h.get("win", "")).strip() == "คนอื่น"]
+    s["is_me_won"] = any(str(h.get("win", "")).strip() == "ฉันเปียเอง" for h in hist)
+    s["my_bid_amount"] = sum(float(h.get("bid", 0) or 0) for h in hist if str(h.get("win", "")).strip() == "ฉันเปียเอง")
+
 def compute_due_amount(s):
     """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ)
-    วงเปีย: ฐาน×มือ + ดอกของงวดที่ 'เราเปียเอง' ไปแล้ว (ต้องส่งดอกนี้ทุกงวดจนจบวง)"""
+    วงเปีย: ฐาน×มือ + ดอกของทุกมือที่ 'เราเปียเอง' ไปแล้ว (ทบกันไปทุกงวดจนจบวง)"""
     num_hands = int(s.get("num_hands", 1))
     if s.get("share_type", "").startswith("แชร์เปีย"):
-        own_bids = sum(float(h.get("bid", 0)) for h in s.get("history", []) if h.get("win") == "ฉันเปียเอง")
-        return s.get("base_payment", 0) * num_hands + own_bids
-    return sum(float(hd["payment"]) for hd in s.get("hands_data", []))
+        base = _base_per_hand(s, num_hands)
+        own_bids = sum(float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "ฉันเปียเอง")
+        return base * num_hands + own_bids
+    return sum(float(hd.get("payment", 0) or 0) for hd in s.get("hands_data", []))
 
 def pay_one_period(s):
     """บันทึกการจ่าย 1 งวด (งวดปัจจุบัน) คืน (line_message, note_text)"""
@@ -234,37 +279,46 @@ def circle_chip_html(s):
     return f"<span class='chip' style='background:{c};color:{_text_on(c)};'>{get_emoji(s)} {s.get('name','')}</span>"
 
 def project_circle(s):
-    """พยากรณ์ ยอดจ่าย/รับ/กำไร เมื่อเล่นจนจบวง
-    วงเปีย: หลังเปียได้ ต้องจ่าย ฐาน+ดอกที่เปีย ทุกงวดจนจบ → เปียเร็ว=จ่ายส่วนเกินหลายงวด"""
+    """พยากรณ์ ยอดจ่าย/รับ/กำไร เมื่อเล่นจนจบวง (รองรับหลายมือ)
+    วงเปีย: เปียได้กี่มือก็รับเงินกี่ครั้ง และดอกที่เปียแต่ละมือทบกันในยอดจ่ายทุกงวดจนจบ"""
     num_hands = int(s.get("num_hands", 1))
     N = int(s.get("total_periods", 0))
     cur = int(s.get("current_period", 1))
     res = {"is_pia": False}
     if s.get("share_type", "").startswith("แชร์เปีย"):
         res["is_pia"] = True
-        P = float(s.get("principal", 0))
-        B = s.get("base_payment", 0) * num_hands
-        own_bid = sum(float(h.get("bid", 0)) for h in s.get("history", []) if h.get("win") == "ฉันเปียเอง")
-        accumulated = sum(s.get("other_bids", []))
-        bids = [b for b in s.get("other_bids", []) if b > 0]
+        P = float(s.get("principal", 0) or 0)
+        base = _base_per_hand(s, num_hands)
+        B = base * num_hands
+        win_rows = [h for h in s.get("history", []) if str(h.get("win", "")).strip() == "ฉันเปียเอง"]
+        won_count = len(win_rows)
+        own_ongoing = sum(float(h.get("bid", 0) or 0) for h in win_rows)         # ดอกที่ล็อกแล้ว/งวด
+        accumulated = sum(float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "คนอื่น")
+        bids = [float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "คนอื่น" and float(h.get("bid", 0) or 0) > 0]
         avg_bid = (sum(bids) / len(bids)) if bids else float(s.get("start_bid", 0) or 0)
-        if s.get("is_me_won"):
-            past_paid = sum(float(h.get("paid", 0)) for h in s.get("history", []))
-            remaining = max(0, N - (cur - 1))
-            pay = past_paid + remaining * (B + own_bid)
-            receive = sum(float(h.get("received", 0)) for h in s.get("history", []))
-            note = "อิงผลเปียจริง (งวดที่เหลือจ่ายฐาน+ดอกที่เปียไป จนจบวง)"
+        remaining_hands = max(0, num_hands - won_count)
+
+        past_paid = sum(float(h.get("paid", 0) or 0) for h in s.get("history", []))
+        past_received = sum(float(h.get("received", 0) or 0) for h in s.get("history", []))
+        future_periods = max(0, N - (cur - 1))
+        # อนาคต: จ่ายฐาน+ดอกที่ล็อกแล้วทุกงวด (มือที่เหลือสมมุติเปียช่วงท้าย = ดอกส่วนเกินน้อยมาก)
+        future_pay = future_periods * (B + own_ongoing)
+        est_each_receive = P + accumulated + avg_bid * max(0, N - cur)           # มือที่เหลือเปียท้ายวง
+        future_receive = remaining_hands * est_each_receive
+        pay = past_paid + future_pay
+        receive = past_received + future_receive
+        if remaining_hands == 0:
+            note = f"เปียครบทุกมือแล้ว — งวดที่เหลือจ่ายงวดละ {B + own_ongoing:,.0f} ฿ จนจบวง"
         else:
-            # กรณีดีสุด: เปียงวดสุดท้าย (ไม่ต้องจ่ายดอกส่วนเกินเลย)
-            receive = P + accumulated + avg_bid * max(0, N - cur)
-            pay = B * N
-            note = "กรณีดีสุด: เปียงวดท้าย (ดูจุดคุ้มทุนด้านล่างประกอบ)"
-        res.update({"P": P, "B": B, "N": N, "cur": cur, "own_bid": own_bid,
-                    "accumulated": accumulated, "avg_bid": avg_bid})
+            note = f"กรณีดีสุด: อีก {remaining_hands} มือเปียช่วงท้ายวง (ตอนนี้จ่ายงวดละ {B + own_ongoing:,.0f} ฿)"
+        res.update({"P": P, "B": B, "N": N, "cur": cur, "base": base, "own_ongoing": own_ongoing,
+                    "accumulated": accumulated, "avg_bid": avg_bid, "won_count": won_count,
+                    "remaining_hands": remaining_hands, "past_paid": past_paid, "past_received": past_received,
+                    "future_periods": future_periods})
     else:
-        pay_per = sum(float(hd.get("payment", 0)) for hd in s.get("hands_data", []))
+        pay_per = sum(float(hd.get("payment", 0) or 0) for hd in s.get("hands_data", []))
         pay = pay_per * N
-        receive = sum(float(hd.get("amount", 0)) for hd in s.get("hands_data", []))
+        receive = sum(float(hd.get("amount", 0) or 0) for hd in s.get("hands_data", []))
         note = "อิงตารางขั้นบันไดที่กำหนดไว้แน่นอน"
     res.update({"pay": pay, "receive": receive, "profit": receive - pay, "note": note})
     return res
@@ -577,40 +631,39 @@ if menu == "🏠 วงแชร์ของฉัน":
 
         with st.expander("🔮 พยากรณ์ & จุดคุ้มทุน"):
             pj = project_circle(s)
-            if not pj["is_pia"]:
-                pc1, pc2, pc3 = st.columns(3)
-                pc1.metric("จ่ายทั้งหมด", f"{pj['pay']:,.0f} ฿")
-                pc2.metric("รับทั้งหมด", f"{pj['receive']:,.0f} ฿")
-                pc3.metric("กำไร/ขาดทุน", f"{pj['profit']:,.0f} ฿", delta=pj['profit'])
-                st.caption("ℹ️ " + pj["note"])
-            elif s.get("is_me_won"):
-                ongoing = pj["B"] + pj["own_bid"]
-                pc1, pc2, pc3 = st.columns(3)
-                pc1.metric("จ่ายทั้งหมด (คาด)", f"{pj['pay']:,.0f} ฿")
-                pc2.metric("รับแล้ว", f"{pj['receive']:,.0f} ฿")
-                pc3.metric("กำไร/ขาดทุน (คาด)", f"{pj['profit']:,.0f} ฿", delta=pj['profit'])
-                st.caption(f"ℹ️ คุณเปียไปแล้ว — งวดที่เหลือจ่ายงวดละ {ongoing:,.0f} ฿ (ฐาน {pj['B']:,.0f} + ดอกที่เปีย {pj['own_bid']:,.0f}) จนจบวง")
-            else:
-                B, N, cur, P, acc, avg = pj["B"], pj["N"], pj["cur"], pj["P"], pj["accumulated"], pj["avg_bid"]
-                st.write("ปรับสมมุติฐานเพื่อดูว่าควรเปียงวดไหนถึงจะเริ่มได้กำไร:")
+            pc1, pc2, pc3 = st.columns(3)
+            pc1.metric("จ่ายทั้งหมด (คาด)", f"{pj['pay']:,.0f} ฿")
+            pc2.metric("รับทั้งหมด (คาด)", f"{pj['receive']:,.0f} ฿")
+            pc3.metric("กำไร/ขาดทุน (คาด)", f"{pj['profit']:,.0f} ฿", delta=pj['profit'])
+            st.caption("ℹ️ " + pj["note"])
+
+            if pj.get("is_pia") and pj.get("remaining_hands", 0) > 0:
+                B, N, cur, P = pj["B"], pj["N"], pj["cur"], pj["P"]
+                acc, avg, own = pj["accumulated"], pj["avg_bid"], pj["own_ongoing"]
+                past_paid, past_received, fp = pj["past_paid"], pj["past_received"], pj["future_periods"]
+                st.markdown(f"**🎯 จุดคุ้มทุน — ควรเปีย 'มือถัดไป' งวดไหน** (เหลือ {pj['remaining_hands']} มือ)")
                 a1, a2 = st.columns(2)
                 others_avg = a1.number_input("ดอกเฉลี่ยที่คนอื่นเปีย/งวด", min_value=0.0, value=float(round(avg)), step=50.0, key=f"be_oth_{s['name']}")
-                my_bid = a2.number_input("ดอกที่เราจะเปีย/งวด", min_value=0.0, value=float(round(avg)), step=50.0, key=f"be_my_{s['name']}")
+                my_bid = a2.number_input("ดอกที่เราจะเปีย/งวด (มือนี้)", min_value=0.0, value=float(round(avg)), step=50.0, key=f"be_my_{s['name']}")
                 rows, be_period = [], None
                 for k in range(cur, N + 1):
-                    receive_k = P + acc + others_avg * (k - cur)      # เงินต้น + ดอกคนก่อนหน้า
-                    pay_k = B * N + my_bid * (N - k)                  # ฐานทุกงวด + ดอกส่วนเกินหลังเปีย
-                    profit_k = receive_k - pay_k
+                    # ยอดรับของมือนี้ถ้าเปียงวด k
+                    recv_k = P + acc + others_avg * (k - cur)
+                    # จ่ายทั้งวง = จ่ายไปแล้ว + (ฐาน+ดอกที่ล็อก)*งวดที่เหลือ + ดอกมือนี้*(งวดหลังเปีย)
+                    pay_k = past_paid + (B + own) * fp + my_bid * (N - k)
+                    recv_total = past_received + recv_k
+                    profit_k = recv_total - pay_k
                     if be_period is None and profit_k >= 0:
                         be_period = k
-                    rows.append({"เปียงวดที่": k, "รับ(คาด)": round(receive_k), "จ่ายทั้งวด(คาด)": round(pay_k), "กำไร/ขาดทุน": round(profit_k)})
+                    rows.append({"เปียงวดที่": k, "รับมือนี้(คาด)": round(recv_k),
+                                 "จ่ายทั้งวง(คาด)": round(pay_k), "กำไร/ขาดทุนรวม": round(profit_k)})
                 if be_period:
-                    st.success(f"🎯 ควรเปียตั้งแต่ **งวดที่ {be_period}** เป็นต้นไปถึงจะเริ่มได้กำไร — เปียก่อนหน้านี้ขาดทุน")
+                    st.success(f"🎯 ควรเปียมือนี้ตั้งแต่ **งวดที่ {be_period}** เป็นต้นไปถึงจะเริ่มได้กำไร — เปียก่อนหน้านี้ขาดทุน")
                 else:
-                    st.warning("⚠️ ด้วยสมมุติฐานนี้ ไม่มีงวดไหนได้กำไรเลย ลองลด 'ดอกที่เราจะเปีย' ลง")
-                st.caption("📌 ยิ่งเปียช้า + เปียดอกต่ำ ยิ่งกำไร เพราะจ่ายดอกส่วนเกินน้อยงวดกว่า และได้ดอกของคนเปียก่อนหน้าเยอะกว่า")
+                    st.warning("⚠️ ด้วยสมมุติฐานนี้ ไม่มีงวดไหนได้กำไร ลองลด 'ดอกที่เราจะเปีย' ลง")
+                st.caption("📌 ยิ่งเปียช้า+ดอกต่ำ ยิ่งกำไร (จ่ายดอกส่วนเกินน้อยงวด + ได้ดอกคนก่อนหน้าเยอะ) · ตารางคิดทีละ 1 มือ ถ้าเหลือหลายมือให้ดูทีละมือ")
                 st.dataframe(
-                    pd.DataFrame(rows).style.format({"รับ(คาด)": "{:,.0f}", "จ่ายทั้งวด(คาด)": "{:,.0f}", "กำไร/ขาดทุน": "{:,.0f}"}),
+                    pd.DataFrame(rows).style.format({"รับมือนี้(คาด)": "{:,.0f}", "จ่ายทั้งวง(คาด)": "{:,.0f}", "กำไร/ขาดทุนรวม": "{:,.0f}"}),
                     use_container_width=True, hide_index=True)
 
         # --- ⚙️ ส่วนจัดการรายละเอียดและลบวงแชร์ ---
@@ -783,8 +836,9 @@ if menu == "🏠 วงแชร์ของฉัน":
             if s["history"]:
                 edited_df = st.data_editor(pd.DataFrame(s["history"]), num_rows="dynamic", use_container_width=True)
                 if st.button("💾 บันทึกการแก้ไขตาราง"):
-                    s["history"] = edited_df.to_dict("records")
+                    s["history"] = _clean_history(edited_df.to_dict("records"))
                     s["current_period"] = len(s["history"]) + 1
+                    sync_derived_from_history(s)
                     save_data(st.session_state.db)
                     st.success("อัปเดตประวัติเรียบร้อย!")
                     st.rerun()
