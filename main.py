@@ -586,7 +586,7 @@ if "current_user" not in st.session_state: st.session_state.current_user = None
 # ====================================================
 if st.session_state.current_user is None:
     st.image("https://media.tenor.com/XLwkPdamUikAAAAi/hello-kitty.gif", width=150)
-    st.title("🎀 ยินดีต้อนรับสู่ Share rae rae la")
+    st.title("🎀 ยินดีต้อนรับสู่ Share La La La")
     col1, col2 = st.columns(2)
     with col1:
         selected_user = st.selectbox("👤 เลือกชื่อผู้เล่นที่มีอยู่:", st.session_state.db["users"])
