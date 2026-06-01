@@ -516,7 +516,7 @@ def parse_share_text(text):
 # ====================================================
 # --- การตั้งค่าหน้าจอและ Theme (Sanrio Style) ---
 # ====================================================
-st.set_page_config(page_title="Share La La La", layout="wide", page_icon="🎀")
+st.set_page_config(page_title="Share La La La", layout="wide", page_icon="🎀", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Itim&family=Mali:wght@400;600&display=swap');
@@ -541,6 +541,10 @@ st.markdown("""
     .stProgress > div > div > div > div { background-color: #FF69B4 !important; }
 
     /* ===== ปรับให้เหมาะกับมือถือ ===== */
+    /* ปิด sidebar ของ Streamlit ทั้งหมด (ใช้เมนูปุ่มในแอปแทน) */
+    [data-testid="stSidebar"], [data-testid="stSidebarNav"] { display: none !important; }
+    [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"], [data-testid="stExpandSidebarButton"] { display: none !important; }
     /* เผื่อ status bar มือถือ: ดันแถบบน (Fork/เมนู) และ sidebar ให้พ้นนาฬิกา/ไอคอนแจ้งเตือน */
     [data-testid="stHeader"] { padding-top: 2.6rem !important; }
     /* ซ่อนแถบ dev ของ Streamlit (Fork/GitHub/Deploy/เมนู ⋮) — ไม่จำเป็นสำหรับผู้ใช้ และเป็นตัวที่ไปชนปุ่มเมนู */
@@ -604,20 +608,38 @@ if st.session_state.current_user is None:
     st.stop()
 
 # ====================================================
-# --- Sidebar: เมนูนำทาง ---
+# --- เมนูนำทางแบบแอปมือถือ (แทน Sidebar) ---
 # ====================================================
-st.sidebar.image("https://media.tenor.com/aeCDQP0TFfIAAAAi/kitty.gif", use_container_width=True)
-st.sidebar.title("🎀 Share Menu")
-st.sidebar.write(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
-if st.sidebar.button("🔄 เปลี่ยนผู้เล่น"):
-    st.session_state.current_user = None
-    st.rerun()
+if "page" not in st.session_state:
+    st.session_state.page = "💰 จ่ายวันนี้"
 
-st.sidebar.divider()
-mute_line = st.sidebar.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
-st.sidebar.divider()
+st.markdown("### 🎀 Share La La La")
+st.caption(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
 
-menu = st.sidebar.radio("ไปที่หน้า:", ["💰 จ่ายวันนี้", "🏠 วงแชร์ของฉัน", "➕ สร้างวงแชร์ใหม่", "📊 สรุปกำไร/ขาดทุนรวม"])
+# ปุ่มเมนู 4 ปุ่ม (2x2) — ปุ่มหน้าที่เลือกอยู่เป็นสีเข้ม
+nav_items = [
+    ("💰 จ่ายวันนี้", "💰 จ่ายวันนี้"),
+    ("🏠 วงแชร์ของฉัน", "🏠 วงแชร์ของฉัน"),
+    ("➕ สร้างวงใหม่", "➕ สร้างวงแชร์ใหม่"),
+    ("📊 สรุป", "📊 สรุปกำไร/ขาดทุนรวม"),
+]
+nav_cells = list(st.columns(2)) + list(st.columns(2))
+for (label, key), cell in zip(nav_items, nav_cells):
+    active = (st.session_state.page == key)
+    if cell.button(label, key=f"nav_{key}", use_container_width=True,
+                   type=("primary" if active else "secondary")):
+        st.session_state.page = key
+        st.rerun()
+
+with st.expander("⚙️ บัญชี & ตั้งค่า"):
+    if st.button("🔄 เปลี่ยนผู้เล่น"):
+        st.session_state.current_user = None
+        st.session_state.pop("page", None)
+        st.rerun()
+    mute_line = st.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
+
+st.divider()
+menu = st.session_state.page
 
 user_shares = [s for s in st.session_state.db["shares"] if s.get("owner") == st.session_state.current_user]
 
