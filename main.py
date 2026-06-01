@@ -539,6 +539,41 @@ st.markdown("""
     .pill { display:inline-block; padding:4px 14px; border-radius:999px; color:white; font-size:0.9rem; font-weight:600; box-shadow: 1px 2px 6px rgba(0,0,0,0.12); }
     .chip { display:inline-block; padding:5px 16px; border-radius:999px; font-weight:600; font-size:1.05rem; box-shadow: 1px 2px 6px rgba(0,0,0,0.15); margin: 2px 0; }
     .stProgress > div > div > div > div { background-color: #FF69B4 !important; }
+
+    /* ===== ปรับให้เหมาะกับมือถือ ===== */
+    .block-container { padding-top: 4.6rem !important; padding-bottom: 4rem !important;
+        padding-left: 1rem !important; padding-right: 1rem !important; }
+
+    /* ปุ่มเปิด Sidebar (ลูกศร >) — ขยับลงจากขอบบน + ขยายให้กดง่าย ไม่ชนแถบแจ้งเตือนมือถือ */
+    [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"] {
+        top: 1.9rem !important; left: 0.5rem !important; z-index: 999990 !important;
+    }
+    [data-testid="collapsedControl"] button, [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarCollapseButton"] {
+        width: 2.9rem !important; height: 2.9rem !important;
+        background: #FFB6C1 !important; border: 2px solid #FF69B4 !important;
+        border-radius: 14px !important; box-shadow: 1px 2px 8px rgba(255,105,180,.35) !important;
+    }
+    [data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg {
+        width: 1.7rem !important; height: 1.7rem !important; color: #7a2a45 !important;
+    }
+
+    /* ปุ่มทั่วไปใหญ่ขึ้น กดสะดวก */
+    .stButton>button { min-height: 48px !important; font-size: 1.05rem !important; padding: 0.55rem 1.1rem !important; }
+
+    @media (max-width: 640px) {
+        .block-container { padding-top: 4.8rem !important; }
+        .stButton>button { width: 100% !important; min-height: 54px !important; font-size: 1.12rem !important; }
+        [data-baseweb="input"] input, [data-baseweb="select"] > div, textarea,
+        .stNumberInput input, .stTextInput input { min-height: 46px !important; font-size: 1rem !important; }
+        h1 { font-size: 1.6rem !important; } h2 { font-size: 1.35rem !important; } h3 { font-size: 1.15rem !important; }
+        [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
+        /* เมนูในแถบข้างให้แตะง่าย */
+        [data-testid="stSidebar"] label { font-size: 1.05rem !important; padding: 4px 0 !important; }
+    }
     </style>
     """, unsafe_allow_html=True)
 
