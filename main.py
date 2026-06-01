@@ -543,6 +543,9 @@ st.markdown("""
     /* ===== ปรับให้เหมาะกับมือถือ ===== */
     /* เผื่อ status bar มือถือ: ดันแถบบน (Fork/เมนู) และ sidebar ให้พ้นนาฬิกา/ไอคอนแจ้งเตือน */
     [data-testid="stHeader"] { padding-top: 2.6rem !important; }
+    /* ซ่อนแถบ dev ของ Streamlit (Fork/GitHub/Deploy/เมนู ⋮) — ไม่จำเป็นสำหรับผู้ใช้ และเป็นตัวที่ไปชนปุ่มเมนู */
+    [data-testid="stToolbar"], [data-testid="stToolbarActions"], [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"], #MainMenu, [class*="viewerBadge"] { display: none !important; }
     [data-testid="stSidebar"] { padding-top: 2.6rem !important; }
     [data-testid="stSidebarHeader"] { padding-top: 0.4rem !important; }
     .block-container { padding-top: 3.4rem !important; padding-bottom: 4rem !important;
