@@ -541,37 +541,35 @@ st.markdown("""
     .stProgress > div > div > div > div { background-color: #FF69B4 !important; }
 
     /* ===== ปรับให้เหมาะกับมือถือ ===== */
-    .block-container { padding-top: 4.6rem !important; padding-bottom: 4rem !important;
+    /* เผื่อ status bar มือถือ: ดันแถบบน (Fork/เมนู) และ sidebar ให้พ้นนาฬิกา/ไอคอนแจ้งเตือน */
+    [data-testid="stHeader"] { padding-top: 2.6rem !important; }
+    [data-testid="stSidebar"] { padding-top: 2.6rem !important; }
+    [data-testid="stSidebarHeader"] { padding-top: 0.4rem !important; }
+    .block-container { padding-top: 3.4rem !important; padding-bottom: 4rem !important;
         padding-left: 1rem !important; padding-right: 1rem !important; }
 
-    /* ปุ่มเปิด Sidebar (ลูกศร >) — ขยับลงจากขอบบน + ขยายให้กดง่าย ไม่ชนแถบแจ้งเตือนมือถือ */
-    [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"],
-    [data-testid="stSidebarCollapseButton"] {
-        top: 1.9rem !important; left: 0.5rem !important; z-index: 999990 !important;
+    /* ปุ่มเปิด sidebar ตอน 'ปิด' อยู่ (ลอยมุมซ้าย) ขยับลงพ้น status bar */
+    [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
+        top: 2.6rem !important; left: 0.5rem !important; z-index: 999990 !important;
     }
+    /* ปุ่ม <</> ให้ใหญ่พอกด สีชมพู */
     [data-testid="collapsedControl"] button, [data-testid="stSidebarCollapsedControl"] button,
-    [data-testid="stSidebarCollapseButton"] button,
-    [data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarCollapseButton"] {
-        width: 2.9rem !important; height: 2.9rem !important;
-        background: #FFB6C1 !important; border: 2px solid #FF69B4 !important;
-        border-radius: 14px !important; box-shadow: 1px 2px 8px rgba(255,105,180,.35) !important;
+    [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapseButton"] button {
+        width: 2.6rem !important; height: 2.6rem !important;
+        background: #FFB6C1 !important; border: 2px solid #FF69B4 !important; border-radius: 14px !important;
     }
     [data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="stSidebarCollapseButton"] svg {
-        width: 1.7rem !important; height: 1.7rem !important; color: #7a2a45 !important;
-    }
+    [data-testid="stSidebarCollapseButton"] svg { color: #7a2a45 !important; }
 
     /* ปุ่มทั่วไปใหญ่ขึ้น กดสะดวก */
     .stButton>button { min-height: 48px !important; font-size: 1.05rem !important; padding: 0.55rem 1.1rem !important; }
 
     @media (max-width: 640px) {
-        .block-container { padding-top: 4.8rem !important; }
         .stButton>button { width: 100% !important; min-height: 54px !important; font-size: 1.12rem !important; }
         [data-baseweb="input"] input, [data-baseweb="select"] > div, textarea,
         .stNumberInput input, .stTextInput input { min-height: 46px !important; font-size: 1rem !important; }
-        h1 { font-size: 1.6rem !important; } h2 { font-size: 1.35rem !important; } h3 { font-size: 1.15rem !important; }
-        [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
-        /* เมนูในแถบข้างให้แตะง่าย */
+        h1 { font-size: 1.55rem !important; } h2 { font-size: 1.3rem !important; } h3 { font-size: 1.12rem !important; }
+        [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
         [data-testid="stSidebar"] label { font-size: 1.05rem !important; padding: 4px 0 !important; }
     }
     </style>
