@@ -516,7 +516,7 @@ def parse_share_text(text):
 # ====================================================
 # --- การตั้งค่าหน้าจอและ Theme (Sanrio Style) ---
 # ====================================================
-st.set_page_config(page_title="Share rae rae la", layout="wide", page_icon="🎀")
+st.set_page_config(page_title="Share La La La", layout="wide", page_icon="🎀")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Itim&family=Mali:wght@400;600&display=swap');
