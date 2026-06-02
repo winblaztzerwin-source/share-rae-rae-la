@@ -100,6 +100,11 @@ def _base_per_hand(s, num_hands):
     base = float(s.get("base_payment", 0) or 0)
     return base if base > 0 else _infer_base_per_hand(s, num_hands)
 
+def _share_type(s):
+    """คืนประเภทวง โดยถ้าไม่มี/เป็น null ให้ถือว่าเป็น 'แชร์เปีย' (ค่าเริ่มต้นของแอป)
+    กันบั๊กวงเก่าที่ share_type เป็น null แล้วทำให้คิดยอดเป็น 0 หรือพัง"""
+    return s.get("share_type") or "แชร์เปีย (ประมูลดอกเบี้ย)"
+
 def _clean_history(records):
     """ทำความสะอาดประวัติที่แก้ผ่านตาราง: แปลงตัวเลขเป็น float, ตัดช่องว่างคำสถานะ
     (กันปัญหา numpy type ตอนเซฟ และคำว่า 'ฉันเปียเอง' ที่มีช่องว่างเลยจับไม่ตรง)"""
@@ -123,7 +128,7 @@ def _clean_history(records):
 def sync_derived_from_history(s):
     """คำนวณค่าที่สืบทอด (other_bids/is_me_won/my_bid_amount) ใหม่จากประวัติ
     เรียกหลังแก้ตารางประวัติ เพื่อให้การคิดดอก/พยากรณ์ตรงกับข้อมูลจริง"""
-    if not s.get("share_type", "").startswith("แชร์เปีย"):
+    if not _share_type(s).startswith("แชร์เปีย"):
         return
     hist = s.get("history", [])
     s["other_bids"] = [float(h.get("bid", 0) or 0) for h in hist if str(h.get("win", "")).strip() == "คนอื่น"]
@@ -134,7 +139,7 @@ def compute_due_amount(s):
     """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ)
     วงเปีย: ฐาน×มือ + ดอกของทุกมือที่ 'เราเปียเอง' ไปแล้ว (ทบกันไปทุกงวดจนจบวง)"""
     num_hands = int(s.get("num_hands", 1))
-    if s.get("share_type", "").startswith("แชร์เปีย"):
+    if _share_type(s).startswith("แชร์เปีย"):
         base = _base_per_hand(s, num_hands)
         own_bids = sum(float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "ฉันเปียเอง")
         return base * num_hands + own_bids
@@ -145,7 +150,7 @@ def pay_one_period(s):
     num_hands = int(s.get("num_hands", 1))
     today_str = datetime.now().strftime("%Y-%m-%d")
     period = s["current_period"]
-    if s.get("share_type", "").startswith("แชร์เปีย"):
+    if _share_type(s).startswith("แชร์เปีย"):
         due = compute_due_amount(s)
         s["history"].append({"p": period, "date": today_str, "paid": due, "received": 0, "bid": 0, "win": "รอผลเปีย"})
         s["current_period"] += 1
@@ -184,7 +189,7 @@ def undo_last_period(s):
         return False
     rec = s["history"].pop()
     s["current_period"] = max(1, s["current_period"] - 1)
-    if s.get("share_type", "").startswith("แชร์เปีย"):
+    if _share_type(s).startswith("แชร์เปีย"):
         win = rec.get("win")
         if win == "คนอื่น":
             ob = s.get("other_bids", [])
@@ -285,7 +290,7 @@ def project_circle(s):
     N = int(s.get("total_periods", 0))
     cur = int(s.get("current_period", 1))
     res = {"is_pia": False}
-    if s.get("share_type", "").startswith("แชร์เปีย"):
+    if _share_type(s).startswith("แชร์เปีย"):
         res["is_pia"] = True
         P = float(s.get("principal", 0) or 0)
         base = _base_per_hand(s, num_hands)
@@ -656,7 +661,7 @@ if menu == "🏠 วงแชร์ของฉัน":
         selected_name = st.selectbox("เลือกวงแชร์เพื่อดูรายละเอียด:", list(name_to_share.keys()),
                                      format_func=lambda n: f"{get_emoji(name_to_share[n])} {n}")
         s = next(s for s in user_shares if s["name"] == selected_name)
-        share_type = s.get("share_type", "แชร์เปีย (ประมูลดอกเบี้ย)")
+        share_type = _share_type(s)
         num_hands = int(s.get("num_hands", 1))
 
         st.markdown(circle_chip_html(s), unsafe_allow_html=True)
@@ -786,6 +791,7 @@ if menu == "🏠 วงแชร์ของฉัน":
                 s["num_hands"] = edit_num_hands
                 s["emoji"] = edit_emoji
                 s["color"] = edit_color
+                s["share_type"] = share_type
                 if share_type.startswith("แชร์เปีย"):
                     s["base_payment"] = edit_base
                 else:
@@ -954,7 +960,7 @@ elif menu == "💰 จ่ายวันนี้":
             picks = {}
             for s, d in due_list:
                 num_hands = int(s.get("num_hands", 1))
-                is_pia = s.get("share_type", "").startswith("แชร์เปีย")
+                is_pia = _share_type(s).startswith("แชร์เปีย")
                 amt = compute_due_amount(s)
                 tag = "🔴 เลยกำหนด" if d < today else "🟢 ครบวันนี้"
                 extra = ""
@@ -1169,7 +1175,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
                     share_paid += float(h["paid"])
                     share_received += float(h["received"])
             except: pass
-        t_type = "ขั้นบันได" if s.get("share_type", "").startswith("แชร์ขั้นบันได") else "แชร์เปีย"
+        t_type = "ขั้นบันได" if _share_type(s).startswith("แชร์ขั้นบันได") else "แชร์เปีย"
         summary_data.append({"ชื่อวงแชร์": f"{get_emoji(s)} {s['name']}", "รูปแบบ": t_type, "ยอดจ่ายรวม": share_paid, "ยอดรับรวม": share_received, "กำไร/ขาดทุน": share_received - share_paid})
         total_paid += share_paid
         total_received += share_received
@@ -1230,7 +1236,7 @@ elif menu == "📊 สรุปกำไร/ขาดทุนรวม":
             if s["current_period"] <= s["total_periods"]:
                 if get_period_date(s, s["current_period"]) == today:
                     num_h = int(s.get("num_hands", 1))
-                    if s.get("share_type", "แชร์เปีย").startswith("แชร์เปีย"):
+                    if _share_type(s).startswith("แชร์เปีย"):
                         amt = compute_due_amount(s)
                         due_msgs.append(f"- {s['name']} ({num_h} มือ): {amt:,.2f} ฿")
                     else:
