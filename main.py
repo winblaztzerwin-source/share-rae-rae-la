@@ -516,7 +516,7 @@ def parse_share_text(text):
 # ====================================================
 # --- การตั้งค่าหน้าจอและ Theme (Sanrio Style) ---
 # ====================================================
-st.set_page_config(page_title="Share La La La", layout="wide", page_icon="🎀", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Share rae rae la", layout="wide", page_icon="🎀", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Itim&family=Mali:wght@400;600&display=swap');
@@ -590,7 +590,7 @@ if "current_user" not in st.session_state: st.session_state.current_user = None
 # ====================================================
 if st.session_state.current_user is None:
     st.image("https://media.tenor.com/XLwkPdamUikAAAAi/hello-kitty.gif", width=150)
-    st.title("🎀 ยินดีต้อนรับสู่ Share La La La")
+    st.title("🎀 ยินดีต้อนรับสู่ Share rae rae la")
     col1, col2 = st.columns(2)
     with col1:
         selected_user = st.selectbox("👤 เลือกชื่อผู้เล่นที่มีอยู่:", st.session_state.db["users"])
@@ -613,7 +613,7 @@ if st.session_state.current_user is None:
 if "page" not in st.session_state:
     st.session_state.page = "💰 จ่ายวันนี้"
 
-st.markdown("### 🎀 Share La La La")
+st.markdown("### 🎀 Share rae rae la")
 st.caption(f"👤 เข้าใช้งานโดย: **{st.session_state.current_user}**")
 
 # ปุ่มเมนู 4 ปุ่ม (2x2) — ปุ่มหน้าที่เลือกอยู่เป็นสีเข้ม
@@ -637,6 +637,7 @@ with st.expander("⚙️ บัญชี & ตั้งค่า"):
         st.session_state.pop("page", None)
         st.rerun()
     mute_line = st.checkbox("🔕 ปิดแจ้งเตือน LINE (สำหรับลงข้อมูลย้อนหลัง)")
+    st.caption("📦 เวอร์ชันแอป: v13")
 
 st.divider()
 menu = st.session_state.page
@@ -659,6 +660,22 @@ if menu == "🏠 วงแชร์ของฉัน":
         num_hands = int(s.get("num_hands", 1))
 
         st.markdown(circle_chip_html(s), unsafe_allow_html=True)
+
+        with st.expander("🔍 ตรวจสอบการคำนวณยอด (debug)"):
+            _nh = int(s.get("num_hands", 1))
+            st.write({
+                "share_type": s.get("share_type"),
+                "base_payment (ค่าในข้อมูล)": s.get("base_payment"),
+                "num_hands": s.get("num_hands"),
+                "ฐานที่ใช้จริง (เดาให้ถ้าเป็น 0)": _base_per_hand(s, _nh),
+                "current_period": s.get("current_period"),
+            })
+            _dbg = [{"win (ดูตามจริง)": repr(h.get("win")), "bid": h.get("bid"), "paid": h.get("paid")} for h in s.get("history", [])]
+            st.write("ประวัติ (เช็คว่า 'ฉันเปียเอง' ตรงเป๊ะไหม):")
+            st.write(_dbg)
+            _own = sum(float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "ฉันเปียเอง")
+            st.write(f"➡️ ดอกที่เปียเอง (own_bids) = {_own}")
+            st.write(f"➡️ ยอดที่คำนวณได้ = ฐาน {_base_per_hand(s, _nh):,.0f} × {_nh} มือ + ดอก {_own:,.0f} = **{compute_due_amount(s):,.2f} บาท**")
 
         hands_data = s.get("hands_data", [])
         if not hands_data and not share_type.startswith("แชร์เปีย"):
