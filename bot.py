@@ -53,7 +53,7 @@ def compute_due_amount(s):
     """ยอดที่ต้องจ่ายของงวดปัจจุบัน (รวมทุกมือ) — ตรรกะเดียวกับแอป v9
     วงเปีย: ฐาน×มือ + ดอกของทุกมือที่ 'เราเปียเอง' ไปแล้ว (ทบกันทุกงวดจนจบ)"""
     num_hands = int(s.get("num_hands", 1))
-    if s.get("share_type", "").startswith("แชร์เปีย"):
+    if (s.get("share_type") or "แชร์เปีย (ประมูลดอกเบี้ย)").startswith("แชร์เปีย"):
         base = _base_per_hand(s, num_hands)
         own_bids = sum(float(h.get("bid", 0) or 0) for h in s.get("history", []) if str(h.get("win", "")).strip() == "ฉันเปียเอง")
         return base * num_hands + own_bids
@@ -95,7 +95,7 @@ def main():
                 continue
 
             owner_name = s.get("owner", "ไม่ระบุชื่อ")
-            share_type = s.get("share_type", "แชร์เปีย")
+            share_type = s.get("share_type") or "แชร์เปีย (ประมูลดอกเบี้ย)"
             num_hands = int(s.get("num_hands", 1))
             due_amt = compute_due_amount(s)
 
